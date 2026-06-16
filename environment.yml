@@ -1,0 +1,28 @@
+name: teapot
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Pipeline runner
+  - nextflow>=23.04.0
+
+  # Core proteomics tools
+  - bioconda::openms=3.1.0          # provides OpenSwathWorkflow
+  - bioconda::pyopenms=3.1.0
+  - bioconda::pyprophet=2.2.5
+  - bioconda::encyclopedia=1.12.2
+
+  # Python utilities
+  - python>=3.10
+  - pandas
+  - numpy
+  - matplotlib
+  - seaborn
+
+  # Optional: msproteomicstools for post-processing
+  - bioconda::msproteomicstools
+
+  # Singularity (for HPC; install via system package manager if unavailable)
+  # - singularity>=3.8   # uncomment if managing via conda

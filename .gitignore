@@ -1,0 +1,44 @@
+# Nextflow
+.nextflow/
+.nextflow.log*
+work/
+results/
+
+# Singularity cache
+.singularity/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+env/
+dist/
+build/
+
+# Conda
+.conda/
+
+# Data files (large binary formats)
+*.mzML
+*.mzXML
+*.raw
+*.d/
+*.wiff
+*.wiff.scan
+*.osw
+*.elib
+*.sqMass
+
+# Logs & reports
+*.log
+pipeline_info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
