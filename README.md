@@ -29,7 +29,8 @@ TEAPOT is a pipeline for targeted evaluation and analysis of proteomics data der
 ```bash
 git clone https://github.com/thanadol-git/teapot.git
 cd teapot
-pip install -r requirements.txt
+conda env create -f environment.yml
+conda activate teapot
 ```
 
 ## Usage
