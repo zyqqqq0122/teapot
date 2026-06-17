@@ -1,28 +1,36 @@
 name: teapot
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
   - defaults
 
 dependencies:
-  # Pipeline runner
-  - nextflow>=23.04.0
-
-  # Core proteomics tools
-  - bioconda::openms=3.1.0          # provides OpenSwathWorkflow
-  - bioconda::pyopenms=3.1.0
-  - bioconda::pyprophet=2.2.5
-  - bioconda::encyclopedia=1.12.2
-
-  # Python utilities
+  # Python
   - python>=3.10
+  - pip
+
+  # Pipeline runner (requires Java; installed via bioconda)
+  - bioconda::nextflow>=23.04.0
+
+  # Core proteomics tools (uncomment when ready to add)
+  # - bioconda::openms=3.1.0          # provides OpenSwathWorkflow
+  # - bioconda::pyopenms=3.1.0
+  # - bioconda::pyprophet=2.2.5
+  # - bioconda::encyclopedia=1.12.2
+
+  # Python data/viz packages
   - pandas
   - numpy
   - matplotlib
   - seaborn
 
-  # Optional: msproteomicstools for post-processing
-  - bioconda::msproteomicstools
+  # Graph packages — only add back if a script imports them
+  # - networkx
+  # - graphviz
+  # - pygraphviz    # requires system graphviz C headers; often fails to build
 
-  # Singularity (for HPC; install via system package manager if unavailable)
-  # - singularity>=3.8   # uncomment if managing via conda
+  # msproteomicstools requires Python 2.7 — incompatible with Python 3.10+
+  # - bioconda::msproteomicstools
+
+  # Singularity (install via system package manager on HPC)
+  # - singularity>=3.8
