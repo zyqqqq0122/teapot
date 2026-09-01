@@ -1,0 +1,89 @@
+# OpenSWATH, targeted PRM with SIL internal standards. Absolute quant.
+#   abs_pmol_light = (light / heavy) * known heavy pmol
+# Works on sparse acquisitions.
+
+input:  <path/to/samplesheet.csv>
+fasta:  <path/to/proteins.fasta>
+outdir: results
+
+# --- Library ------------------------------------------------------------------
+# A vendor .blib of the heavy standards, converted to OpenSWATH's .pqp by the
+# pipeline. The light channel is synthesised, so the blib may be heavy-only.
+openswath_blib:    <path/to/vendor_standards.blib>
+background_source: none
+
+# --- Feasibility gate ---------------------------------------------------------
+# Match the tolerance to -mz_extraction_window below.
+openswath_occupancy_tolerance:   0.4
+openswath_max_occupancy:         0.35
+openswath_feasibility_warn_only: false
+
+# --- Heavy/light pairing ------------------------------------------------------
+heavy_label:
+  - {site: 'K', unimod: 'UniMod:259'}   # 13C6,15N2 Lys
+  - {site: 'R', unimod: 'UniMod:267'}   # 13C6,15N4 Arg
+complete_channels_ion_types:           ['b','y']
+complete_channels_max_frag_charge:     2
+complete_channels_tolerance_ppm:       20.0
+complete_channels_coverage_hard_floor: 0.5
+complete_channels_coverage_warn_below: 0.9
+complete_channels_skip_proteins:
+  - '<iRT_Tag>'
+
+# --- Retention-time harmonisation ---------------------------------------------
+rt_harmonize_fallback:            fail
+rt_harmonize_min_anchors:         5
+rt_harmonize_min_r2:              0.98
+rt_harmonize_min_anchor_coverage: 0.8
+
+# --- Absolute amounts ---------------------------------------------------------
+standard_amounts: <path/to/standard_amounts.csv>
+min_consistency:  0.0
+
+# --- Extraction ---------------------------------------------------------------
+# LOAD-BEARING on ion-trap data: every window must be 0.4 Th.
+#
+# -matching_window_only matters: scheduled PRM interleaves narrow targeted
+# windows with wide survey scans, and without it a precursor is scored against
+# scans acquired for a different precursor.
+openswath_assaygen_args: '-min_transitions 6 -max_transitions 10'
+openswath_decoygen_args: ''
+openswath_search_args: >
+  -force
+  -matching_window_only true
+  -mz_extraction_window 0.4 -mz_extraction_window_unit Th
+  -irt_mz_extraction_window 0.4 -irt_mz_extraction_window_unit Th
+  -mz_extraction_window_ms1 0.4 -mz_extraction_window_ms1_unit Th
+  -mz_correction_function none
+  -enable_ms1 true
+  -rt_extraction_window 600
+  -RTNormalization:estimateBestPeptides
+  -RTNormalization:alignmentMethod lowess
+  -RTNormalization:NrRTBins 5
+  -RTNormalization:MinBinsFilled 3
+  -min_rsq 0.90
+  -min_coverage 0.1
+  -Library:override_group_label_check
+  -Scoring:stop_report_after_feature 5
+  -readOptions cacheWorkingInMemory
+  -batchSize 500
+  -tempDirectory .
+
+# --- FDR ----------------------------------------------------------------------
+# 'pyprophet' scores target vs decoy inside the search and needs no background,
+# which suits a standards-only library.
+openswath_prm_fdr: pyprophet
+
+fdr:               0.01
+primary_abundance: openswath
+java_mem:          '32g'
+
+run_diathem:             true
+diathem_fragment_tol_th: 0.4
+diathem_precursor_tol:   0.02
+diathem_rt_window:       150
+run_tric:                false
+
+# cluster_options:     '-A <your-slurm-account>'
+# container_cache_dir: /path/to/shared/apptainer_cache
+# container_tmp_dir:   /path/to/scratch/apptainer_tmp

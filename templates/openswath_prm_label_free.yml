@@ -1,0 +1,56 @@
+# OpenSWATH, label-free PRM. Works on sparse acquisitions.
+
+input:  <path/to/samplesheet.csv>
+fasta:  <path/to/proteins.fasta>
+outdir: results
+
+# --- Library ------------------------------------------------------------------
+# A measured chromatogram library, converted to OpenSWATH's .pqp by the
+# pipeline. Its other entries act as the background.
+elib:              <path/to/chromatogram_library.elib>
+background_source: none
+
+rt_harmonize_fallback: fail
+
+# --- Extraction ---
+# LOAD-BEARING, a cliff not a preference: both windows must be 0.4 Th on
+# ion-trap data.
+openswath_assaygen_args: '-min_transitions 6 -max_transitions 10'
+openswath_decoygen_args: ''
+openswath_search_args: >
+  -force
+  -mz_extraction_window 0.4 -mz_extraction_window_unit Th
+  -irt_mz_extraction_window 0.4 -irt_mz_extraction_window_unit Th
+  -mz_extraction_window_ms1 0.4 -mz_extraction_window_ms1_unit Th
+  -mz_correction_function none
+  -enable_ms1 true
+  -rt_extraction_window 600
+  -RTNormalization:estimateBestPeptides
+  -RTNormalization:alignmentMethod lowess
+  -RTNormalization:NrRTBins 5
+  -RTNormalization:MinBinsFilled 3
+  -min_rsq 0.90
+  -min_coverage 0.1
+  -Library:override_group_label_check
+  -Scoring:stop_report_after_feature 5
+  -readOptions cacheWorkingInMemory
+  -batchSize 500
+  -tempDirectory .
+
+# --- FDR ----------------------------------------------------------------------
+# 'context' trains on the background; 'pyprophet' scores target vs decoy inside
+# the search and needs no background at all.
+openswath_prm_fdr:         context
+context_engine:            mprophet
+context_input_profile:     auto
+context_seed_coefficients: encyclopedia
+
+fdr:               0.01
+run_diathem:       false     # OpenSWATH's own areas are the primary abundance here
+run_tric:          false     # cross-run alignment; wants many more than two runs
+primary_abundance: openswath
+java_mem:          '32g'
+
+# cluster_options:     '-A <your-slurm-account>'
+# container_cache_dir: /path/to/shared/apptainer_cache
+# container_tmp_dir:   /path/to/scratch/apptainer_tmp

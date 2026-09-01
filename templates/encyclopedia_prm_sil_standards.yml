@@ -1,0 +1,53 @@
+# EncyclopeDIA, targeted PRM with SIL internal standards. Absolute quant.
+#   abs_pmol_light = (light / heavy) * known heavy pmol
+
+input:  <path/to/samplesheet.csv>
+fasta:  <path/to/proteins.fasta>
+outdir: results
+
+# --- Library ---
+# Heavy-only vendor .blib is fine; the light channel is synthesised. A large
+# background COSTS identifications here, hence 'none'.
+blib:              <path/to/vendor_standards.blib>
+background_source: none
+
+# --- Heavy/light pairing ------------------------------------------------------
+heavy_label:
+  - {site: 'K', unimod: 'UniMod:259'}   # 13C6,15N2 Lys
+  - {site: 'R', unimod: 'UniMod:267'}   # 13C6,15N4 Arg
+complete_channels_ion_types:           ['b','y']
+complete_channels_max_frag_charge:     2
+complete_channels_tolerance_ppm:       20.0
+complete_channels_coverage_hard_floor: 0.5
+complete_channels_coverage_warn_below: 0.9
+# Peptides that exist only as heavy and must NOT be given a synthetic twin.
+complete_channels_skip_proteins:
+  - '<iRT_Tag>'
+
+# --- Retention-time harmonisation ---------------------------------------------
+rt_harmonize_fallback:            fail   # 'fail' refuses a bad alignment rather than guessing
+rt_harmonize_min_anchors:         5
+rt_harmonize_min_r2:              0.98
+rt_harmonize_min_anchor_coverage: 0.8
+
+# --- Absolute amounts ---------------------------------------------------------
+# TSV/CSV mapping peptide -> known heavy pmol.
+standard_amounts: <path/to/standard_amounts.csv>
+min_consistency:  0.0        # LOD gate on diathem-based absolute quant
+
+# --- Instrument (ion trap) -------------------
+dia_search_args:     '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'
+context_search_args: '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'
+
+fdr:               0.01
+primary_abundance: encyclopedia
+java_mem:          '32g'
+
+run_diathem:             true
+diathem_fragment_tol_th: 0.4
+diathem_precursor_tol:   0.02
+diathem_rt_window:       150
+
+# cluster_options:     '-A <your-slurm-account>'
+# container_cache_dir: /path/to/shared/apptainer_cache
+# container_tmp_dir:   /path/to/scratch/apptainer_tmp

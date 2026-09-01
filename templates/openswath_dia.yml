@@ -1,0 +1,23 @@
+# =============================================================================
+# OpenSWATH, wide-window DIA.  Search + pyprophet + TRIC alignment.
+# =============================================================================
+
+input:  <path/to/samplesheet.csv>          # openswath_dia.csv
+fasta:  <path/to/proteins.fasta>
+outdir: results
+
+use_koina:        true
+koina_models:     'Prosit_2020_HCD;IM2Deep_CCS;Prosit_2019_iRT'
+background_fasta: <path/to/proteome.fasta>
+
+# High-resolution DIA defaults. Tighten for Orbitrap, widen for ion trap.
+openswath_search_args: >
+  -mz_extraction_window 30 -mz_extraction_window_unit ppm
+  -enable_ms1 true
+  -rt_extraction_window 600
+
+pyprophet_learn_args: '--classifier=XGBoost --xeval_num_iter=3 --ss_initial_fdr=0.05 --ss_iteration_fdr=0.01'
+pyprophet_apply_args: '--classifier=XGBoost'
+
+# container_cache_dir: /path/to/shared/apptainer_cache
+# container_tmp_dir:   /path/to/scratch/apptainer_tmp

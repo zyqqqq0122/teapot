@@ -1,0 +1,30 @@
+# EncyclopeDIA, wide-window DIA. Proteome-scale discovery.
+
+input:  <path/to/samplesheet.csv>
+fasta:  <path/to/proteins.fasta>
+outdir: results
+
+# --- Library ------------------------------------------------------------------
+# Pick ONE. A measured chromatogram library is best; otherwise predict one.
+elib: <path/to/chromatogram_library.elib>
+# use_koina:        true
+# koina_models:     'Prosit_2020_HCD;IM2Deep_CCS;Prosit_2019_iRT'
+# koina_url:        'https://koina.wilhelmlab.org:443/'   # the trailing slash matters
+# background_fasta: <path/to/proteome.fasta>
+
+background_source: none
+
+# --- Instrument ---------------------------------------------------------------
+# These are ION-TRAP values. For a high-resolution Orbitrap MS2, delete the line
+# and let EncyclopeDIA use its own defaults (10 ppm, CID).
+dia_search_args: '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'
+
+fdr:               0.01
+primary_abundance: encyclopedia
+java_mem:          '32g'
+
+run_diathem: false
+
+# cluster_options:     '-A <your-slurm-account>'
+# container_cache_dir: /path/to/shared/apptainer_cache
+# container_tmp_dir:   /path/to/scratch/apptainer_tmp
