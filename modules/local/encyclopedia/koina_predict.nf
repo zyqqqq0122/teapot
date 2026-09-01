@@ -11,17 +11,9 @@ process KOINA_PREDICT {
     path "versions.yml",                 emit: versions
 
     script:
-    // EncyclopeDIA Koina flags (ConvertFastaToKoinaPrositLibrary.java):
-    //   -i       <fasta>               required
-    //   -o       <out.dlib>            optional
-    //   -models  "frag;ims;rt"         semicolon-delimited code names
-    //   -url     <https://host:port/>  MUST end with slash
-    //
-    // Code names are getName().replace(' ', '_'). Defaults:
-    //   frag = Prosit_2020_HCD
-    //   ims  = IM2Deep_CCS
-    //   rt   = Prosit_2019_iRT
     """
+    set -o pipefail
+
     java -Xmx${params.java_mem} -jar ${params.encyclopedia_jar} \\
         -convert -fastaToKoinaLibrary \\
         -i ${fasta} \\

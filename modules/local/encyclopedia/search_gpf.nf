@@ -16,11 +16,13 @@ process SEARCH_GPF {
 
     script:
     """
+    set -o pipefail
+
     java -Xmx${params.java_mem} -jar ${params.encyclopedia_jar} \\
         -i ${combined} \\
         -l ${dlib} \\
         -f ${fasta} \\
-        ${params.gpf_search_args} \\
+        ${Args.flat(params.gpf_search_args)} \\
         2>&1 | tee ${meta.condition}.search_gpf.log
 
     cat <<-EOF > versions.yml

@@ -6,7 +6,7 @@ process MERGE_GPF {
                mode: params.publish_mode
 
     input:
-    tuple val(meta), path(fractions)   // list of >=2 GPF .dia fraction files
+    tuple val(meta), path(fractions)
 
     output:
     tuple val(meta), path("${meta.condition}_combined.dia"),   emit: combined
@@ -14,11 +14,10 @@ process MERGE_GPF {
     path  "versions.yml", emit: versions
 
     script:
-    // PreprocessDIAFiles (-convert -mergeDIA):
-    //   -i A:B:C   colon-delimited list of .mzML/.dia files to merge
-    //   -o out.dia merged output (must be omitted when only one input)
     def joined = fractions.collect { it.name }.join(':')
     """
+    set -o pipefail
+
     java -Xmx${params.java_mem} -jar ${params.encyclopedia_jar} \\
         -convert -mergeDIA \\
         -i ${joined} \\

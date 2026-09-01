@@ -2,17 +2,17 @@ process MSCONVERT {
     label 'msconvert'
     tag   "${meta.id}"
 
-    container        'docker://proteowizard/pwiz-skyline-i-agree-to-the-vendor-licenses'
-    containerOptions '-B `mktemp -d /dev/shm/wineXXX`:/mywineprefix --writable-tmpfs'
+    container        "${params.msconvert_container}"
+    containerOptions '-B `mktemp -d /dev/shm/wineXXX`:/mywineprefix'
 
     publishDir path: { "${params.outdir}/msconvert/${meta.id}" },
                mode: params.publish_mode
 
     input:
-    tuple val(meta), path(raw), path(mass_list)
+    tuple val(meta), path(raw), path(sidecars), path(reference_list)
 
     output:
-    tuple val(meta), path("${raw.baseName}.mzML"), path(mass_list), emit: mzml
+    tuple val(meta), path("${raw.baseName}*.mzML"), path(reference_list), emit: mzml
     tuple val(meta), path("${meta.id}.msconvert.log"),              emit: log
     path  "versions.yml",                                            emit: versions
 
@@ -30,7 +30,7 @@ process MSCONVERT {
 
     cat <<-EOF > versions.yml
     "${task.process}":
-      container: proteowizard/pwiz-skyline-i-agree-to-the-vendor-licenses
+      container: ${params.msconvert_container}
     EOF
     """
 

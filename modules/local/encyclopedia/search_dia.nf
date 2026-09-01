@@ -11,24 +11,24 @@ process SEARCH_DIA {
     path  fasta
 
     output:
-    // features:     raw scored features across all candidates
-    // targets:      Percolator-filtered target peptides at params.fdr (canonical DIA result)
-    // decoys:       Percolator-filtered decoys, useful for QC / FDR sanity checks
-    // elib:         per-file chromatogram-library output written by encyclopedia
-    tuple val(meta), path("${dia.baseName}.features.txt"),                              emit: features
-    tuple val(meta), path("${dia.baseName}.encyclopedia.txt"),       optional: true,     emit: targets
-    tuple val(meta), path("${dia.baseName}.encyclopedia.decoy.txt"), optional: true,     emit: decoys
-    tuple val(meta), path("${dia.baseName}.elib"),                    optional: true,     emit: elib
+    tuple val(meta), path("${dia.name}.features.txt"),                              emit: features
+    tuple val(meta), path("${dia.name}.encyclopedia.txt"),       optional: true,     emit: targets
+    tuple val(meta), path("${dia.name}.encyclopedia.decoy.txt"), optional: true,     emit: decoys
+    tuple val(meta), path("${dia.name}.elib"),                    optional: true,     emit: elib
     tuple val(meta), path("${meta.id}.search.log"),                                       emit: log
     path  "versions.yml", emit: versions
 
     script:
+    def jar_fp = Fingerprint.of(params.encyclopedia_jar)
     """
-    java -Xmx${params.java_mem} -jar ${params.encyclopedia_jar} \\
+    set -o pipefail
+
+    java -Xmx${params.java_mem} -cp ${params.encyclopedia_jar} \\
+        edu.washington.gs.maccoss.encyclopedia.Encyclopedia \\
         -i ${dia} \\
         -l ${library} \\
         -f ${fasta} \\
-        ${params.dia_search_args} \\
+        ${Args.flat(params.dia_search_args)} \\
         2>&1 | tee ${meta.id}.search.log
 
     cat <<-EOF > versions.yml
@@ -39,10 +39,10 @@ process SEARCH_DIA {
 
     stub:
     """
-    touch ${dia.baseName}.features.txt \\
-          ${dia.baseName}.encyclopedia.txt \\
-          ${dia.baseName}.encyclopedia.decoy.txt \\
-          ${dia.baseName}.elib \\
+    touch ${dia.name}.features.txt \\
+          ${dia.name}.encyclopedia.txt \\
+          ${dia.name}.encyclopedia.decoy.txt \\
+          ${dia.name}.elib \\
           ${meta.id}.search.log
     echo '"${task.process}": {encyclopedia: stub}' > versions.yml
     """

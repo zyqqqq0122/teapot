@@ -12,10 +12,9 @@ process BLIB_TO_DLIB {
     path "versions.yml",                       emit: versions
 
     script:
-    // -convert -blibToLib (ConvertBLIBToLibrary.java)
-    //   -i <blib> -f <fasta>  required
-    //   -o <dlib>             output (optional; defaults to <blib>.dlib)
     """
+    set -o pipefail
+
     java -Xmx${params.java_mem} -jar ${params.encyclopedia_jar} \\
         -convert -blibToLib \\
         -i ${blib} \\
