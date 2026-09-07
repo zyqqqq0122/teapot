@@ -168,6 +168,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         chg  = next((c for c in t.columns
                      if c.lower() in ('precursorcharge','charge')), None)
         q    = next((c for c in t.columns if c.lower() in ('qvalue','q-value','q_value')), None)
+        perr = next((c for c in t.columns if c.lower() in ('posterior_error_prob','posterior_error_probability','pep')), None)
         if pep is None: continue
         id_rows.append(pd.DataFrame({
             'sample_id':    sid,
@@ -176,9 +177,11 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             'charge':       (t[chg].astype(int) if chg
                              else t[t.columns[0]].apply(charge_from_psmid)),
             'id_qvalue':    t[q] if q else pd.NA,
+            'id_pep':       t[perr] if perr else pd.NA,
         }).assign(channel=lambda d: d['peptidoform'].apply(channel_of)))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
-        columns=['sample_id','peptidoform','stripped_seq','charge','id_qvalue','channel'])
+        columns=['sample_id','peptidoform','stripped_seq','charge','id_qvalue',
+                 'id_pep','channel'])
 
     if os.path.basename(DIA_TSV) == 'NO_FILE' or not os.path.getsize(DIA_TSV):
         dia = pd.DataFrame(columns=['sample_id','peptidoform','charge','channel',
@@ -236,7 +239,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
-            'id_qvalue','calibrated']
+            'id_qvalue','id_pep','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)

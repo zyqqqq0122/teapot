@@ -114,13 +114,14 @@ process MERGE_QUANT_OPENSWATH_PRM {
                          if c.lower() in ('peptide', 'sequence', 'peptidesequence')), t.columns[-2])
         prot_col = 'Proteins' if 'Proteins' in t.columns else t.columns[-1]
         q_col    = next((c for c in t.columns if c.lower() in ('q-value','q_value','qvalue')), None)
+        perr_col = next((c for c in t.columns if c.lower() in ('posterior_error_prob','posterior_error_probability','pep')), None)
         id_rows.append(pd.DataFrame({
             'sample_id':    sid,
             'peptide':      t[pep_col].astype(str),
             'stripped_seq': t[pep_col].astype(str).apply(strip_mods),
             'protein':      t[prot_col].astype(str),
             'id_qvalue':    t[q_col] if q_col else pd.NA,
-            'id_pep':       t['posterior_error_prob'] if 'posterior_error_prob' in t.columns else pd.NA,
+            'id_pep':       t[perr_col] if perr_col else pd.NA,
         }))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
         columns=['sample_id','peptide','stripped_seq','protein','id_qvalue','id_pep'])

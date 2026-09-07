@@ -154,6 +154,8 @@ process MERGE_QUANT_ENCYCLOPEDIA_PRM {
                      if c.lower() in ('precursorcharge','charge')), None)
         q    = next((c for c in t.columns
                      if c.lower() in ('qvalue','q-value','q_value')), None)
+        perr = next((c for c in t.columns
+                     if c.lower() in ('posterior_error_prob','posterior_error_probability','pep')), None)
         prot = next((c for c in t.columns
                      if c.lower() in ('proteinids','proteinid','proteinaccession',
                                       'protein','proteinname','proteins',
@@ -171,13 +173,14 @@ process MERGE_QUANT_ENCYCLOPEDIA_PRM {
             'protein':      (t[prot].astype(str).apply(dedupe_accessions)
                              if prot else ''),
             'id_qvalue':    t[q] if q else pd.NA,
+            'id_pep':       t[perr] if perr else pd.NA,
         })
         d['channel']  = d['peptidoform'].apply(channel_of)
         d['peptide']  = d['peptidoform']
         id_rows.append(d)
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
         columns=['sample_id','peptide','peptidoform','stripped_seq','charge','protein',
-                 'id_qvalue','channel'])
+                 'id_qvalue','id_pep','channel'])
 
     if os.path.basename(DIA_TSV) == 'NO_FILE' or not os.path.getsize(DIA_TSV):
         dia = pd.DataFrame(columns=['sample_id','peptidoform','charge','channel',
@@ -236,7 +239,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_PRM {
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
-            'id_qvalue','calibrated']
+            'id_qvalue','id_pep','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)

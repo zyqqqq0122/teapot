@@ -91,6 +91,7 @@ process MERGE_QUANT_OPENSWATH_DIA {
         chg  = 'Charge'          if 'Charge'          in t.columns else 'charge'
         inten= 'Intensity'       if 'Intensity'       in t.columns else 'intensity'
         q    = 'm_score'         if 'm_score'         in t.columns else None
+        perr = next((c for c in t.columns if c.lower() in ('posterior_error_prob','posterior_error_probability','pep')), None)
         prot = 'ProteinName'     if 'ProteinName'     in t.columns else 'protein'
         decoy= 'decoy'           if 'decoy'           in t.columns else None
         if decoy:
@@ -104,10 +105,11 @@ process MERGE_QUANT_OPENSWATH_DIA {
             'protein':             t[prot].astype(str),
             'abundance_openswath': t[inten] if inten in t.columns else pd.NA,
             'id_qvalue':           t[q] if q else pd.NA,
+            'id_pep':              t[perr] if perr else pd.NA,
         }))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
         columns=['sample_id','peptide','peptidoform','stripped_seq','charge',
-                 'protein','abundance_openswath','id_qvalue'])
+                 'protein','abundance_openswath','id_qvalue','id_pep'])
     ids['channel'] = ids['peptidoform'].apply(channel_of)
 
     if os.path.basename(DIA_TSV) == 'NO_FILE' or not os.path.getsize(DIA_TSV):
@@ -157,7 +159,7 @@ process MERGE_QUANT_OPENSWATH_DIA {
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
-            'id_qvalue','calibrated']
+            'id_qvalue','id_pep','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)
