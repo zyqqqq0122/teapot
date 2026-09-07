@@ -26,6 +26,7 @@ process QUANTIFY_HEAVY_LIGHT {
 
     script:
     def label_json = groovy.json.JsonOutput.toJson(heavy_label ?: [])
+    def skip_json  = groovy.json.JsonOutput.toJson(params.complete_channels_skip_proteins ?: [])
     """
 
     python3 - <<'PY' > quantify_heavy_light.log 2>&1
@@ -37,6 +38,7 @@ process QUANTIFY_HEAVY_LIGHT {
     PRIMARY   = "${primary}"
     MIN_CONS  = float("${min_consistency}")
     FDR       = float("${params.fdr}")
+    SKIP_PROT = json.loads(r'''${skip_json}''')
 
     heavy_accs = { r["unimod"] for r in LABEL }
     if not heavy_accs:
@@ -123,9 +125,12 @@ process QUANTIFY_HEAVY_LIGHT {
         heavy = (sub[sub['channel']=='heavy']
                  .groupby(key).agg(heavy_amp=(col,'sum'),
                                     heavy_consistency=('consistency','mean'),
-                                    heavy_qvalue=('id_qvalue','min'))
+                                    heavy_qvalue=('id_qvalue','min'),
+                                    heavy_protein=('protein','first'))
                  .reset_index())
         pr = light.merge(heavy, on=key, how='outer')
+        pr['protein'] = pr['protein'].fillna(pr['heavy_protein'])
+        pr = pr.drop(columns=['heavy_protein'])
         pr['method'] = method
         return pr
 
@@ -192,17 +197,26 @@ process QUANTIFY_HEAVY_LIGHT {
 
     def _absent(v):
         return pd.isna(v) or float(v) == 0.0
+    def _skipped_standard(r):
+        prot = str(r.get('protein') or '')
+        return bool(prot) and any(p in prot for p in SKIP_PROT)
     def status(r):
         light_ok = not _absent(r['light_amp'])
         heavy_ok = not _absent(r['heavy_amp'])
         if light_ok and heavy_ok:
             return 'detected'
         if not light_ok and heavy_ok:
-            return 'light_missing'
+            return 'skipped_standard' if _skipped_standard(r) else 'light_missing'
         if light_ok and not heavy_ok:
             return 'heavy_missing'
         return 'both_missing'
     paired_all['status'] = paired_all.apply(status, axis=1)
+
+    n_skipped = int((paired_all['status'] == 'skipped_standard').sum())
+    if n_skipped:
+        print(f"status skipped_standard: {n_skipped} rows matching "
+              f"{SKIP_PROT} are heavy-only by design and are NOT counted "
+              "as light_missing.", file=sys.stderr)
 
     n_abs = int(paired_all['abs_pmol_light'].notna().sum())
     if n_abs == 0:
