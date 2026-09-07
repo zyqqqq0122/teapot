@@ -70,9 +70,14 @@ workflow {
               renamed.collect { o, n -> "  ${o} -> ${n}" }.join('\n')
     }
 
-    def unfilled = params.findAll { k, v ->
-        v instanceof CharSequence && (v =~ /<[\w .\/-]+>/)
+    def hasPlaceholder
+    hasPlaceholder = { x ->
+        if (x instanceof CharSequence) return (x =~ /<[\w .\/-]+>/) as Boolean
+        if (x instanceof Map)          return x.values().any { hasPlaceholder(it) }
+        if (x instanceof Collection)   return x.any { hasPlaceholder(it) }
+        return false
     }
+    def unfilled = params.findAll { k, v -> hasPlaceholder(v) }
     if (unfilled) {
         error "Pre-flight: unfilled template placeholder(s):\n" +
               unfilled.collect { k, v -> "  ${k} = '${v}'" }.join('\n')
