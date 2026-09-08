@@ -1,4 +1,3 @@
-include { ASSERT_OPENSWATH_FEASIBLE   } from '../../modules/local/openms/assert_openswath_feasible'
 include { OPENSWATH_WORKFLOW        } from '../../modules/local/openms/openswath_workflow'
 include { PYPROPHET_SUBSAMPLE       } from '../../modules/local/pyprophet/pyprophet_subsample'
 include { PYPROPHET_MERGE           } from '../../modules/local/pyprophet/pyprophet_merge'
@@ -26,16 +25,7 @@ workflow OPENSWATH_DIA {
     diathem_ok
 
     main:
-    def nested_ch
-    if (!params.skip_openswath_feasibility) {
-        ASSERT_OPENSWATH_FEASIBLE(samples.map { meta, mzml, _rl -> tuple(meta, mzml) })
-        nested_ch = ASSERT_OPENSWATH_FEASIBLE.out.nested
-            .map { _m, f -> f }
-            .first()
-            .ifEmpty(no_file)
-    } else {
-        nested_ch = Channel.value(no_file)
-    }
+    def nested_ch = Channel.value(no_file)
 
     OPENSWATH_WORKFLOW(samples, library, irt_library, full_window_flag, nested_ch)
 
@@ -63,7 +53,16 @@ workflow OPENSWATH_DIA {
     }
 
     pp_tsvs = PYPROPHET_EXPORT.out.tsv.map { _m, _ml, tsv -> tsv }.collect(sort: true)
-    MERGE_QUANT_OPENSWATH_DIA(pp_tsvs, diathem_tsv_ch, sample_map,
+
+    def tric_tsv_ch
+    if (params.run_tric) {
+        TRIC_FEATURE_ALIGNMENT(pp_tsvs)
+        tric_tsv_ch = TRIC_FEATURE_ALIGNMENT.out.long
+    } else {
+        tric_tsv_ch = Channel.value(no_file)
+    }
+
+    MERGE_QUANT_OPENSWATH_DIA(pp_tsvs, diathem_tsv_ch, tric_tsv_ch, sample_map,
                         heavy_label, params.primary_abundance)
 
 
@@ -75,10 +74,6 @@ workflow OPENSWATH_DIA {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_OPENSWATH_DIA.out.long, standard_amounts,
                           heavy_label, params.primary_abundance,
                           params.min_consistency)
-    }
-
-    if (params.run_tric) {
-        TRIC_FEATURE_ALIGNMENT(pp_tsvs)
     }
 
     emit:

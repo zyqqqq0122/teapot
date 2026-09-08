@@ -9,7 +9,8 @@ process MERGE_QUANT_OPENSWATH_DIA {
 
     input:
     path  pyprophet_tsvs, stageAs: 'pp/*'
-    path  diathem_tsv
+    path  diathem_tsv, stageAs: 'diathem_in/*'
+    path  tric_tsv,    stageAs: 'tric_in/*'
     path  sample_map
     val   heavy_label
     val   primary
@@ -39,6 +40,7 @@ process MERGE_QUANT_OPENSWATH_DIA {
     import pandas as pd, glob, os, re, json, sys
 
     DIA_TSV    = "${diathem_tsv}"
+    TRIC_TSV   = "${tric_tsv}"
     SAMPLE_MAP = "${sample_map}"
     LABEL      = json.loads(r'''${label_json}''')
     MTOL       = float("${mod_tol}")
@@ -91,6 +93,7 @@ process MERGE_QUANT_OPENSWATH_DIA {
         chg  = 'Charge'          if 'Charge'          in t.columns else 'charge'
         inten= 'Intensity'       if 'Intensity'       in t.columns else 'intensity'
         q    = 'm_score'         if 'm_score'         in t.columns else None
+        rank = 'peak_group_rank' if 'peak_group_rank' in t.columns else None
         perr = next((c for c in t.columns if c.lower() in ('posterior_error_prob','posterior_error_probability','pep')), None)
         prot = 'ProteinName'     if 'ProteinName'     in t.columns else 'protein'
         decoy= 'decoy'           if 'decoy'           in t.columns else None
@@ -105,11 +108,13 @@ process MERGE_QUANT_OPENSWATH_DIA {
             'protein':             t[prot].astype(str),
             'abundance_openswath': t[inten] if inten in t.columns else pd.NA,
             'id_qvalue':           t[q] if q else pd.NA,
+            'peak_group_rank':     t[rank] if rank else pd.NA,
             'id_pep':              t[perr] if perr else pd.NA,
         }))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
         columns=['sample_id','peptide','peptidoform','stripped_seq','charge',
-                 'protein','abundance_openswath','id_qvalue','id_pep'])
+                 'protein','abundance_openswath','id_qvalue','id_pep',
+                 'peak_group_rank'])
     ids['channel'] = ids['peptidoform'].apply(channel_of)
 
     if os.path.basename(DIA_TSV) == 'NO_FILE' or not os.path.getsize(DIA_TSV):
@@ -124,12 +129,71 @@ process MERGE_QUANT_OPENSWATH_DIA {
         dia = dia[['sample_id','peptidoform','charge','channel','stripped_seq',
                    'abundance_diathem','consistency','n_effective_transitions']]
 
+    tric_supplied = (os.path.basename(TRIC_TSV) != 'NO_FILE'
+                     and os.path.getsize(TRIC_TSV) > 0)
+    if not tric_supplied:
+        tric = pd.DataFrame(columns=['sample_id','peptidoform','charge','channel',
+                                     'abundance_tric'])
+    else:
+        tr = pd.read_csv(TRIC_TSV, sep='\t')
+        fcol = next((c for c in ('align_origfilename','filename','align_runid','run_id')
+                     if c in tr.columns), None)
+        pcol = next((c for c in ('FullPeptideName','modified_sequence','Sequence')
+                     if c in tr.columns), None)
+        ccol = next((c for c in ('Charge','charge') if c in tr.columns), None)
+        icol = next((c for c in ('Intensity','intensity') if c in tr.columns), None)
+        if not all((fcol, pcol, ccol, icol)):
+            sys.exit(
+                "HARD ERROR: TRIC output cannot be joined -- run/file=%r peptide=%r "
+                "charge=%r intensity=%r. Columns present: %s"
+                % (fcol, pcol, ccol, icol, list(tr.columns)))
+        dcol = next((c for c in ('decoy','Decoy') if c in tr.columns), None)
+        if dcol:
+            tr = tr[pd.to_numeric(tr[dcol], errors='coerce').fillna(0).astype(int) == 0]
+        stem2sid = dict(zip(sm['mzml_stem'].astype(str), sm['sample_id'].astype(str)))
+        def to_sid(v):
+            b = os.path.basename(str(v))
+            for ext in ('.mzML.gz','.mzML','.mzXML','.osw','.tsv'):
+                if b.endswith(ext):
+                    b = b[:-len(ext)]
+                    break
+            return stem2sid.get(b, b)
+        tric = pd.DataFrame({
+            'sample_id':      tr[fcol].apply(to_sid),
+            'peptidoform':    tr[pcol].astype(str),
+            'charge':         pd.to_numeric(tr[ccol], errors='coerce'),
+            'abundance_tric': pd.to_numeric(tr[icol], errors='coerce'),
+        }).dropna(subset=['charge'])
+        tric['charge']       = tric['charge'].astype(int)
+        tric['stripped_seq'] = tric['peptidoform'].apply(strip_mods)
+        tric['channel']      = tric['peptidoform'].apply(channel_of)
+        tric['channel'] = tric['peptidoform'].apply(channel_of)
+        tric = (tric.groupby(['sample_id','peptidoform','charge','channel'],
+                             dropna=False)
+                    .agg(abundance_tric=('abundance_tric','sum'))
+                    .reset_index())
+
     key = ['sample_id','stripped_seq','charge','channel']
     base = ids.merge(dia, on=key, how='outer', suffixes=('_id','_dia'))
     base['peptidoform'] = base['peptidoform_id'].fillna(base['peptidoform_dia']) \\
                             if 'peptidoform_id' in base.columns else base['peptidoform']
     base = base.drop(columns=[c for c in ['peptidoform_id','peptidoform_dia'] if c in base.columns])
     base['peptide'] = base['peptide'].fillna(base['peptidoform'])
+
+    base = base.merge(tric, on=['sample_id','peptidoform','charge','channel'],
+                      how='left')
+    if tric_supplied:
+        n_tric = int(base['abundance_tric'].notna().sum())
+        print(f"TRIC: {len(tric)} aligned rows, {n_tric} joined onto the quant table",
+              file=sys.stderr)
+        if n_tric == 0:
+            sys.exit(
+                "HARD ERROR: TRIC ran and produced %d rows, but none joined onto the "
+                "quant table on (sample_id, peptidoform, charge, channel). The likely "
+                "cause is run naming: TRIC identifies runs by file, and those names "
+                "must map through sample_map. Refusing to emit an all-empty "
+                "abundance_tric column silently." % len(tric))
+
     for c in ['abundance_openswath','abundance_diathem','abundance_encyclopedia',
               'abundance_tric','consistency','n_effective_transitions',
               'rt_apex_seconds']:
@@ -159,7 +223,7 @@ process MERGE_QUANT_OPENSWATH_DIA {
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
-            'id_qvalue','id_pep','calibrated']
+            'id_qvalue','id_pep','peak_group_rank','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)
