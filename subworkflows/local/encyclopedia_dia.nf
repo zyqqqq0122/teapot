@@ -2,6 +2,7 @@ include { SEARCH_DIA                   } from '../../modules/local/encyclopedia/
 include { ENCYCLOPEDIA_LIBEXPORT       } from '../../modules/local/encyclopedia/encyclopedia_libexport'
 include { ASSERT_QUANT_PRODUCTIVE      } from '../../modules/local/quant/assert_quant_productive'
 include { DIATHEM_QUANT                } from '../../modules/local/diathem/diathem_quant'
+include { STRIP_REFERENCE_DECOYS      } from '../../modules/local/library/strip_reference_decoys'
 include { MERGE_QUANT_ENCYCLOPEDIA_DIA } from '../../modules/local/quant/merge_quant_encyclopedia_dia'
 include { FINALIZE_QUANT               } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT            } from '../../modules/local/quant/quantify_heavy_light'
@@ -41,7 +42,9 @@ workflow ENCYCLOPEDIA_DIA {
             .map    { _m, f, _ml -> f }
             .collect(sort: true)
         def dia_prior = (diathem_library.name != 'NO_FILE') ? diathem_library : library
-        DIATHEM_QUANT('DIA', mzmls_ch, diathem_targets, dia_prior, sample_map)
+        STRIP_REFERENCE_DECOYS(diathem_targets)
+        DIATHEM_QUANT('DIA', mzmls_ch, STRIP_REFERENCE_DECOYS.out.reference_list,
+                      dia_prior, sample_map)
         diathem_tsv_ch = DIATHEM_QUANT.out.quant.map { _mode, tsv -> tsv }
     } else {
         if (diathem_ok && !have_targets) {

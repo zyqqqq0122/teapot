@@ -4,6 +4,7 @@ include { ENCYCLOPEDIA_LIBEXPORT       } from '../../modules/local/encyclopedia/
 include { ENCYCLOPEDIA_LIBEXPORT_PER_SAMPLE         } from '../../modules/local/encyclopedia/encyclopedia_libexport_per_sample'
 include { ASSERT_QUANT_PRODUCTIVE      } from '../../modules/local/quant/assert_quant_productive'
 include { DIATHEM_QUANT                } from '../../modules/local/diathem/diathem_quant'
+include { STRIP_REFERENCE_DECOYS      } from '../../modules/local/library/strip_reference_decoys'
 include { MERGE_QUANT_ENCYCLOPEDIA_PRM } from '../../modules/local/quant/merge_quant_encyclopedia_prm'
 include { FINALIZE_QUANT               } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT            } from '../../modules/local/quant/quantify_heavy_light'
@@ -45,7 +46,9 @@ workflow ENCYCLOPEDIA_PRM {
             .map    { _m, f, _ml -> f }
             .collect(sort: true)
         def dia_prior = (diathem_library.name != 'NO_FILE') ? diathem_library : elib
-        DIATHEM_QUANT('PRM', mzmls_ch, targets_prm, dia_prior, sample_map)
+        STRIP_REFERENCE_DECOYS(targets_prm)
+        DIATHEM_QUANT('PRM', mzmls_ch, STRIP_REFERENCE_DECOYS.out.reference_list,
+                      dia_prior, sample_map)
         diathem_tsv_ch = DIATHEM_QUANT.out.quant.map { _mode, tsv -> tsv }
     } else {
         diathem_tsv_ch = Channel.value(no_file)
