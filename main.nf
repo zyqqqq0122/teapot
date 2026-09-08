@@ -9,6 +9,7 @@ include { ENCYCLOPEDIA_PRM             } from './subworkflows/local/encyclopedia
 include { OPENSWATH_DIA                } from './subworkflows/local/openswath_dia'
 include { OPENSWATH_PRM                } from './subworkflows/local/openswath_prm'
 include { MSCONVERT                    } from './modules/local/msconvert/msconvert'
+include { ADD_DECOYS_TO_REFERENCE_LIST } from './modules/local/encyclopedia/add_decoys_to_reference_list'
 
 
 def helpMessage() {
@@ -45,6 +46,22 @@ def helpMessage() {
       --heavy_label         List of { residue, unimod } rules. Default SILAC.
       --standard_amounts    TSV/CSV mapping peptide -> known heavy pmol.
     """.stripIndent()
+}
+
+def reference_list_has_decoys(rl) {
+    if (!rl || !rl.exists()) return false
+    def lines = rl.readLines().findAll { it.trim() }
+    if (lines.size() < 2) return false
+    def delim = (lines[0].count('\t') > lines[0].count(',')) ? '\t' : ','
+    def header = lines[0].split(delim, -1).collect { it.trim().toLowerCase().replaceAll('"', '') }
+    def idx = header.findIndexOf { it in ['isdecoy', 'decoy', 'is_decoy'] }
+    if (idx < 0) return false
+    return lines.drop(1).any { line ->
+        def cells = line.split(delim, -1)
+        if (cells.size() <= idx) return false
+        def v = cells[idx].trim().toLowerCase().replaceAll('"', '')
+        v in ['true', '1', 'yes', 'decoy']
+    }
 }
 
 workflow {
@@ -326,7 +343,20 @@ workflow {
         if (has_enc_prm) {
             if (enc_prm_sample_rl != null) {
                 enc_prm_samples = by_route.enc_prm
-                enc_prm_targets = Channel.value(enc_prm_sample_rl)
+                if (params.add_decoys_to_reference_list &&
+                    !reference_list_has_decoys(enc_prm_sample_rl)) {
+                    log.warn "encyclopedia+PRM: the supplied reference_list " +
+                             "'${enc_prm_sample_rl.name}' carries no decoy rows. " +
+                             "Generating them, because mProphet cannot estimate a " +
+                             "reference-side FDR without a null distribution. Set " +
+                             "add_decoys_to_reference_list = false to keep the list as-is."
+                    ADD_DECOYS_TO_REFERENCE_LIST(
+                        Channel.value(enc_prm_sample_rl),
+                        Channel.value(file(params.reference_list_decoy_jar)))
+                    enc_prm_targets = ADD_DECOYS_TO_REFERENCE_LIST.out.reference_list
+                } else {
+                    enc_prm_targets = Channel.value(enc_prm_sample_rl)
+                }
             } else if (params.blib) {
                 enc_prm_samples = by_route.enc_prm
                     .combine(PREPARE_LIBRARY_ENCYCLOPEDIA.out.reference_list_derived)
