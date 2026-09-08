@@ -161,9 +161,25 @@ process FINALIZE_QUANT {
 
     write('quant.full.tsv', out)
 
-    confident = [r for r in out if r['passes_fdr'] == 'true' and r['is_decoy'] != 'true']
+    def best_peak_group(r):
+        v = str(r.get('peak_group_rank') or '').strip()
+        if not v:
+            return True
+        try:
+            return int(float(v)) <= 1
+        except ValueError:
+            return True
+
+    n_lower = sum(1 for r in out if not best_peak_group(r))
+    if n_lower:
+        print("peak groups: dropped %d lower-ranked row(s) from the derived views; "
+              "quant.full.tsv keeps them" % n_lower, file=sys.stderr)
+
+    confident = [r for r in out if r['passes_fdr'] == 'true' and r['is_decoy'] != 'true'
+                 and best_peak_group(r)]
     write('quant.confident.tsv', confident)
-    reference = [r for r in out if r['in_reference_list'] == 'true' and r['is_decoy'] != 'true']
+    reference = [r for r in out if r['in_reference_list'] == 'true' and r['is_decoy'] != 'true'
+                 and best_peak_group(r)]
     write('quant.reference.tsv', reference)
 
     with open('quant_summary.tsv','w',newline='') as f:

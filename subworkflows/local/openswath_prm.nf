@@ -8,6 +8,7 @@ include { PYPROPHET_TO_PSM            } from '../../modules/local/pyprophet/pypr
 include { ASSERT_SEARCH_PRODUCTIVE    } from '../../modules/local/context_ms/assert_search_productive'
 include { EXTRACT_OPENSWATH_INTENSITY } from '../../modules/local/openms/extract_openswath_intensity'
 include { DIATHEM_QUANT               } from '../../modules/local/diathem/diathem_quant'
+include { STRIP_REFERENCE_DECOYS      } from '../../modules/local/library/strip_reference_decoys'
 include { MERGE_QUANT_OPENSWATH_PRM   } from '../../modules/local/quant/merge_quant_openswath_prm'
 include { FINALIZE_QUANT              } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT           } from '../../modules/local/quant/quantify_heavy_light'
@@ -64,23 +65,26 @@ workflow OPENSWATH_PRM {
             .filter { _m, f, _ml -> f.getName().toLowerCase() ==~ /.*\.(mzml|mzxml)$/ }
             .map    { _m, f, _ml -> f }
             .collect(sort: true)
-        def dia_targets = (params.diathem_targets_source == 'library')
-                          ? library : targets_prm
         def dia_prior = (diathem_library.name != 'NO_FILE') ? diathem_library : library
+        def dia_targets
+        if (params.diathem_targets_source == 'library') {
+            dia_targets = library
+        } else {
+            STRIP_REFERENCE_DECOYS(targets_prm)
+            dia_targets = STRIP_REFERENCE_DECOYS.out.reference_list
+        }
         DIATHEM_QUANT('PRM', mzmls_ch, dia_targets, dia_prior, sample_map)
         diathem_tsv_ch = DIATHEM_QUANT.out.quant.map { _mode, tsv -> tsv }
     } else {
         diathem_tsv_ch = Channel.value(no_file)
     }
 
-    def psm_ch
     def peptide_ch
     if ((params.openswath_prm_fdr ?: 'context') == 'pyprophet') {
         PYPROPHET_SCORE_SINGLE(OPENSWATH_WORKFLOW.out.osw.map { m, _ml, o -> tuple(m, o) })
         pp_in = samples.map { m, _f, ml -> tuple(m, ml) }
             .join(PYPROPHET_SCORE_SINGLE.out.tsv)
         PYPROPHET_TO_PSM(pp_in)
-        psm_ch     = PYPROPHET_TO_PSM.out.psm
         peptide_ch = PYPROPHET_TO_PSM.out.peptide
     } else {
         SPLIT_OPENSWATH_FEATURES(OPENSWATH_WORKFLOW.out.osw)
@@ -94,15 +98,14 @@ workflow OPENSWATH_PRM {
         }
 
         CONTEXT_MS_RUN(split_ch)
-        psm_ch     = CONTEXT_MS_RUN.out.psm
         peptide_ch = CONTEXT_MS_RUN.out.peptide
     }
 
     ASSERT_SEARCH_PRODUCTIVE(peptide_ch, 'openswath')
 
-    psms_ch  = psm_ch.map                           { _m, psm -> psm }.collect(sort: true)
+    ids_ch   = peptide_ch.map                       { _m, pep -> pep }.collect(sort: true)
     osw_ints = EXTRACT_OPENSWATH_INTENSITY.out.intensity.map { _m, t -> t }.collect(sort: true)
-    MERGE_QUANT_OPENSWATH_PRM(psms_ch, osw_ints, diathem_tsv_ch, sample_map,
+    MERGE_QUANT_OPENSWATH_PRM(ids_ch, osw_ints, diathem_tsv_ch, sample_map,
                         heavy_label, params.primary_abundance, enc_elib_ch)
 
 

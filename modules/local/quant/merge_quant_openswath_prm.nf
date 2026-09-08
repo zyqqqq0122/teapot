@@ -8,7 +8,7 @@ process MERGE_QUANT_OPENSWATH_PRM {
                mode: params.publish_mode
 
     input:
-    path context_psm_tables, stageAs: 'psm/*'
+    path context_peptide_tables, stageAs: 'ids/*'
     path osw_intensities,    stageAs: 'osw_int/*'
     path diathem_tsv
     path sample_map
@@ -102,18 +102,19 @@ process MERGE_QUANT_OPENSWATH_PRM {
                  'rt_apex_seconds','abundance_openswath'])
 
     id_rows = []
-    for psm_path in sorted(glob.glob('psm/*.psm.reference.txt')):
-        sid = re.sub(r'\\.psm\\.reference\\.txt\$', '', os.path.basename(psm_path))
+    for pep_path in sorted(glob.glob('ids/*.peptide.reference.txt')):
+        sid = re.sub(r'\\.peptide\\.reference\\.txt\$', '', os.path.basename(pep_path))
         try:
-            t = pd.read_csv(psm_path, sep='\\t')
+            t = pd.read_csv(pep_path, sep='\\t')
         except Exception as e:
-            print(f"skip {psm_path}: {e}", file=sys.stderr); continue
+            print(f"skip {pep_path}: {e}", file=sys.stderr); continue
         if t.empty:
             continue
         pep_col  = next((c for c in t.columns
                          if c.lower() in ('peptide', 'sequence', 'peptidesequence')), t.columns[-2])
         prot_col = 'Proteins' if 'Proteins' in t.columns else t.columns[-1]
         q_col    = next((c for c in t.columns if c.lower() in ('q-value','q_value','qvalue')), None)
+        rank_col = next((c for c in t.columns if c.lower() == 'peak_group_rank'), None)
         perr_col = next((c for c in t.columns if c.lower() in ('posterior_error_prob','posterior_error_probability','pep')), None)
         id_rows.append(pd.DataFrame({
             'sample_id':    sid,
@@ -122,9 +123,11 @@ process MERGE_QUANT_OPENSWATH_PRM {
             'protein':      t[prot_col].astype(str),
             'id_qvalue':    t[q_col] if q_col else pd.NA,
             'id_pep':       t[perr_col] if perr_col else pd.NA,
+            'peak_group_rank': t[rank_col] if rank_col else pd.NA,
         }))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
-        columns=['sample_id','peptide','stripped_seq','protein','id_qvalue','id_pep'])
+        columns=['sample_id','peptide','stripped_seq','protein','id_qvalue','id_pep',
+                 'peak_group_rank'])
 
     if os.path.basename(DIA_TSV) == 'NO_FILE' or not os.path.getsize(DIA_TSV):
         dia = pd.DataFrame(columns=['sample_id','peptidoform','charge','channel',
@@ -211,7 +214,7 @@ process MERGE_QUANT_OPENSWATH_PRM {
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
-            'id_qvalue','id_pep','calibrated']
+            'id_qvalue','id_pep','peak_group_rank','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)
