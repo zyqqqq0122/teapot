@@ -4,7 +4,7 @@ process QUANTIFY_HEAVY_LIGHT {
 
     container "${params.python_container}"
 
-    publishDir path: { "${params.outdir}/quantify_heavy_light" },
+    publishDir path: { "${params.outdir}/quant/${route}" },
                mode: params.publish_mode
 
     input:
@@ -13,6 +13,7 @@ process QUANTIFY_HEAVY_LIGHT {
     val   heavy_label
     val   primary
     val   min_consistency
+    val   route
 
     output:
     path "peptide.abs_quant.long.tsv",   emit: peptide_long
@@ -100,15 +101,6 @@ process QUANTIFY_HEAVY_LIGHT {
         _extra = [c for c in ('id_qvalue','abundance_primary_source') if c in base.columns]
         sub = base[[*key,'channel','protein', col,'consistency', *_extra]].copy()
 
-        if method == 'primary' and 'abundance_primary_source' in sub.columns:
-            _src = (sub.dropna(subset=[col])
-                       .groupby(key)['abundance_primary_source'].nunique())
-            _bad = set(_src[_src > 1].index)
-            if _bad:
-                _mask = sub.set_index(key).index.isin(_bad)
-                sub = sub[~_mask]
-                print(f"pair_for_method(primary): dropped {len(_bad)} pair(s) whose two "
-                      f"channels came from different methods", file=sys.stderr)
         if 'id_qvalue' not in sub.columns:
             sub['id_qvalue'] = pd.NA
         sub['id_qvalue'] = pd.to_numeric(sub['id_qvalue'], errors='coerce')
@@ -254,30 +246,42 @@ process QUANTIFY_HEAVY_LIGHT {
     out_cols = [c for c in out_cols if c in paired_all.columns]
     paired_all[out_cols].to_csv("peptide.abs_quant.long.tsv", sep='\\t', index=False)
 
-    pairs = paired_all[(paired_all['method'] == 'primary') &
-                       (paired_all['status'] == 'detected')].copy()
+    pairs = paired_all[(paired_all['status'] == 'detected')
+                       & (paired_all['method'] != 'primary')].copy()
     pairs['ratio_H_L'] = pairs['heavy_amp'] / pairs['light_amp'].replace(0, pd.NA)
 
     pairs['max_qvalue'] = pairs[['light_qvalue','heavy_qvalue']].max(axis=1)
     pairs['both_identified'] = pairs['max_qvalue'].le(FDR).fillna(False)
-    pair_cols = ['sample_id','protein','stripped_seq','charge',
+    pair_cols = ['sample_id','method','protein','stripped_seq','charge',
                  'light_amp','heavy_amp','ratio_L_H','ratio_H_L',
                  'heavy_pmol_known','abs_pmol_light',
                  'light_qvalue','heavy_qvalue','max_qvalue','both_identified',
                  'light_consistency','heavy_consistency']
     pair_cols = [c for c in pair_cols if c in pairs.columns]
-    pairs = pairs[pair_cols].sort_values(['sample_id','protein','stripped_seq','charge'])
+    pairs = pairs[pair_cols].sort_values(['method','sample_id','protein',
+                                          'stripped_seq','charge'])
     pairs.to_csv("peptide.pairs.tsv", sep='\\t', index=False)
-    conf = pairs[pairs['both_identified']]
+
+    _conf_all = pairs[pairs['both_identified']]
+    conf = _conf_all[_conf_all['method'] == PRIMARY]
     conf.to_csv("peptide.pairs.confident.tsv", sep='\\t', index=False)
-    print(f"pairs table: {len(pairs)} light/heavy pairs with both channels quantified, "
-          f"of {len(paired_all[paired_all['method']=='primary'])} primary-method rows",
-          file=sys.stderr)
-    print(f"  of those, BOTH CHANNELS IDENTIFIED at q<={FDR}: {len(conf)}", file=sys.stderr)
-    for sid, g in conf.groupby('sample_id'):
-        print(f"    {sid}: {len(g)} confident pairs, "
-              f"{int(g['abs_pmol_light'].notna().sum())} with an absolute amount",
-              file=sys.stderr)
+    if conf.empty and not _conf_all.empty:
+        print(f"WARNING: peptide.pairs.confident.tsv is EMPTY because "
+              f"primary_abundance = '{PRIMARY}' produced no confident pairs, "
+              f"while these methods did: "
+              f"{sorted(_conf_all['method'].unique())}. Either set "
+              f"primary_abundance to one of those, or read peptide.pairs.tsv, "
+              f"which carries every method.", file=sys.stderr)
+
+    print(f"pairs table: {len(pairs)} light/heavy pairs with both channels "
+          f"quantified by the same tool", file=sys.stderr)
+    for m, g in pairs.groupby('method'):
+        c = g[g['both_identified']]
+        _mark = '  <- reported in peptide.pairs.confident.tsv' if m == PRIMARY else ''
+        print(f"  {m:14} {g['stripped_seq'].nunique():4} peptides paired, "
+              f"{c['stripped_seq'].nunique():4} with BOTH CHANNELS IDENTIFIED at "
+              f"q<={FDR}, {int(c['abs_pmol_light'].notna().sum()):5} rows with an "
+              f"absolute amount{_mark}", file=sys.stderr)
 
     per_peptide_prot = (paired_all.dropna(subset=['abs_pmol_light'])
                                    .groupby(['sample_id','protein','method','stripped_seq'])

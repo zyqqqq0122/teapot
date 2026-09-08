@@ -116,7 +116,7 @@ workflow OPENSWATH_PRM {
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_OPENSWATH_PRM.out.long, standard_amounts,
                           heavy_label, params.primary_abundance,
-                          params.min_consistency)
+                          params.min_consistency, 'osw_prm')
     }
 
     emit:

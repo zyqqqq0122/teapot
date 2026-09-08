@@ -79,7 +79,7 @@ workflow ENCYCLOPEDIA_DIA {
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, standard_amounts,
                           heavy_label, params.primary_abundance,
-                          params.min_consistency)
+                          params.min_consistency, 'enc_dia')
     }
 
     emit:

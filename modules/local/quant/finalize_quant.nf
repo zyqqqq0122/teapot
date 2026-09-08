@@ -107,7 +107,6 @@ process FINALIZE_QUANT {
 
     def annotate(r):
         q      = num(r.get('id_qvalue'))
-        primary= num(r.get('abundance_primary'))
         any_ab = any(num(r.get(c)) not in (None, 0.0) for c in ABUND)
         ident  = q is not None and q <= FDR
         quant  = any_ab

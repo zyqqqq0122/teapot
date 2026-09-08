@@ -215,17 +215,14 @@ process MERGE_QUANT_ENCYCLOPEDIA_PRM {
               'abundance_tric','consistency','n_effective_transitions','rt_apex_seconds']:
         if c not in base.columns: base[c] = pd.NA
 
-    fallback = ['encyclopedia','openswath','diathem','tric']
-    order = [PRIMARY] + [x for x in fallback if x != PRIMARY]
-    def pick(r):
-        for m in order:
-            v = r.get(f'abundance_{m}')
-            if pd.notna(v): return v
-        return pd.NA
-    base['abundance_primary']       = base.apply(pick, axis=1)
-    base['abundance_primary_source'] = base.apply(
-        lambda r: next((m for m in order if pd.notna(r.get(f'abundance_{m}'))), None),
-        axis=1)
+    METHODS = ['encyclopedia','openswath','diathem','tric']
+    _pcol = f'abundance_{PRIMARY}'
+    base['abundance_primary'] = base[_pcol] if _pcol in base.columns else pd.NA
+    base['abundance_primary_source'] = base['abundance_primary'].map(
+        lambda v: PRIMARY if pd.notna(v) else None)
+    _n_pri = int(base['abundance_primary'].notna().sum())
+    print(f"abundance_primary: {PRIMARY} only, no cross-tool fallback "
+          f"({_n_pri} of {len(base)} rows have a value)", file=sys.stderr)
 
     if HAS_HEAVY:
         by_key = base.groupby(['sample_id','stripped_seq','charge'])['channel'] \\
@@ -251,7 +248,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_PRM {
     print(f"id rows:  {len(ids)}", file=sys.stderr)
     print(f"dia rows: {len(dia)}", file=sys.stderr)
     print(f"base:     {len(out)}", file=sys.stderr)
-    for m in fallback:
+    for m in METHODS:
         c = f'abundance_{m}'
         if c in out.columns:
             print(f"  {c}: {int(out[c].notna().sum())} non-null", file=sys.stderr)

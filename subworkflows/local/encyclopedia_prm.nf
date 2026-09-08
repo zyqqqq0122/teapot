@@ -69,7 +69,7 @@ workflow ENCYCLOPEDIA_PRM {
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, standard_amounts,
                           heavy_label, params.primary_abundance,
-                          params.min_consistency)
+                          params.min_consistency, 'enc_prm')
     }
 
     emit:
