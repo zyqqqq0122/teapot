@@ -48,25 +48,26 @@ workflow PREPARE_LIBRARY_OPENSWATH {
 
     } else {
         def tsv_ch
-        if (params.openswath_tsv) {
+        if (params.openswath_tsv || params.openswath_traml) {
+            def osw_native = params.openswath_tsv ?: params.openswath_traml
             if (run_channel) {
-                log.warn "PREPARE_LIBRARY_OPENSWATH: heavy_label is set but --openswath_tsv " +
+                log.warn "PREPARE_LIBRARY_OPENSWATH: heavy_label is set but --openswath_tsv/--openswath_traml " +
                          "passes through as-is. COMPLETE_CHANNELS only operates on " +
                          "blib/dlib libraries; ensure your TSV contains both channels."
             }
             if (has_bg) {
-                log.warn "PREPARE_LIBRARY_OPENSWATH: --openswath_tsv passes through; " +
+                log.warn "PREPARE_LIBRARY_OPENSWATH: --openswath_tsv/--openswath_traml passes through; " +
                          "MERGE_LIBRARIES and HARMONIZE_RT are dlib/blib-only. " +
                          "Ensure your TSV already contains the background union " +
                          "in a coherent RT space."
             }
-            tsv_ch = Channel.value(file(params.openswath_tsv))
+            tsv_ch = Channel.value(file(osw_native))
             if (params.irt_library) {
                 irt_library_ch = Channel.value(file(params.irt_library))
             }
 
-        } else if (params.openswath_blib) {
-            def blib_ch = Channel.value(file(params.openswath_blib))
+        } else if (params.openswath_blib || params.blib) {
+            def blib_ch = Channel.value(file(params.openswath_blib ?: params.blib))
 
             def anchors_ch
             if (params.irt_library) {
@@ -282,7 +283,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
 
         } else {
             error "No OpenSWATH library source. Provide an OSW-native library " +
-                  "(--openswath_pqp, --openswath_tsv) or any engine-agnostic " +
+                  "(--openswath_pqp, --openswath_tsv, --openswath_traml) or any engine-agnostic " +
                   "spectral-library source (--openswath_blib/--blib, --dlib, " +
                   "--elib, --library_sheet, --use_koina)."
         }

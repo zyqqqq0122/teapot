@@ -130,7 +130,7 @@ workflow {
         (it.engine?.trim() ?: 'encyclopedia').toLowerCase() == 'encyclopedia' &&
         it.mode.toUpperCase() == 'PRM' && !ref_of(it)
     }
-    def openswath_prm_uses_derived = has_osw_prm && params.openswath_blib && rows.any {
+    def openswath_prm_uses_derived = has_osw_prm && (params.openswath_blib || params.blib) && rows.any {
         (it.engine?.trim() ?: 'encyclopedia').toLowerCase() == 'openswath' &&
         it.mode.toUpperCase() == 'PRM' && !ref_of(it)
     }
@@ -195,13 +195,14 @@ workflow {
     }
 
     if (params.openswath_prm_encyclopedia_quant && has_osw_prm &&
-        (params.openswath_pqp || params.openswath_tsv)) {
+        (params.openswath_pqp || params.openswath_tsv || params.openswath_traml)) {
         error """
             Pre-flight: openswath_prm_encyclopedia_quant=true needs an encyclopedia-
-            readable library, which the pipeline builds only on the
+            readable library, which the pipeline builds only on the --blib /
             --openswath_blib and --use_koina routes. With --openswath_pqp /
-            --openswath_tsv there is no .dlib for CONTEXT_SEARCH to search.
-            Drop openswath_prm_encyclopedia_quant, or switch to a blib/koina route.
+            --openswath_tsv / --openswath_traml there is no .dlib for CONTEXT_SEARCH
+            to search. Drop openswath_prm_encyclopedia_quant, or switch to a blib/koina
+            route.
         """.stripIndent().trim()
     }
 
@@ -425,7 +426,7 @@ workflow {
             if (sample_rl != null) {
                 openswath_prm_samples = by_route.osw_prm
                 openswath_prm_targets = Channel.value(sample_rl)
-            } else if (params.openswath_blib) {
+            } else if (params.openswath_blib || params.blib) {
                 openswath_prm_samples = by_route.osw_prm
                     .combine(PREPARE_LIBRARY_OPENSWATH.out.reference_list_derived)
                     .map { meta, f, _orig_rl, derived -> tuple(meta, f, derived) }
@@ -433,7 +434,7 @@ workflow {
             } else {
                 error "openswath+PRM samples need a reference_list, either " +
                       "in the samplesheet's reference_list column, or via " +
-                      "--openswath_blib for automatic " +
+                      "--openswath_blib or --blib for automatic " +
                       "derivation from a vendor .blib."
             }
 
