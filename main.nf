@@ -197,12 +197,18 @@ workflow {
     if (params.openswath_prm_encyclopedia_quant && has_osw_prm &&
         (params.openswath_pqp || params.openswath_tsv || params.openswath_traml)) {
         error """
-            Pre-flight: openswath_prm_encyclopedia_quant=true needs an encyclopedia-
-            readable library, which the pipeline builds only on the --blib /
-            --openswath_blib and --use_koina routes. With --openswath_pqp /
-            --openswath_tsv / --openswath_traml there is no .dlib for CONTEXT_SEARCH
-            to search. Drop openswath_prm_encyclopedia_quant, or switch to a blib/koina
-            route.
+            Pre-flight: openswath_prm_encyclopedia_quant=true needs a library
+            EncyclopeDIA can read. --openswath_pqp / --openswath_tsv /
+            --openswath_traml are OpenSWATH-native formats that it cannot, so
+            there is nothing for CONTEXT_SEARCH to search.
+
+            Every other library source works. Either drop
+            openswath_prm_encyclopedia_quant, or supply the library as one of:
+              --blib / --openswath_blib   vendor kit or Skyline library
+              --dlib                      EncyclopeDIA spectrum library
+              --elib                      EncyclopeDIA chromatogram library
+              --library_sheet             GPF runs, built into a chromatogram library
+              --use_koina                 predicted from --fasta
         """.stripIndent().trim()
     }
 
@@ -335,9 +341,14 @@ workflow {
     def enc_labels = has_enc ? (params.heavy_label ?: []) : []
 
     if (has_enc) {
+        def enc_dia_has_reference_list =
+                has_enc_dia && (enc_dia_sample_rl != null || params.blib)
+
+        def need_library_targets = diathem_ok_enc_dia && !enc_dia_has_reference_list
+
         PREPARE_LIBRARY_ENCYCLOPEDIA(fasta, enc_labels, bg_source,
                         params.background_library, params.background_fasta,
-                        params.background_min_targets, no_file)
+                        params.background_min_targets, need_library_targets, no_file)
 
         def enc_prm_samples
         def enc_prm_targets
@@ -375,14 +386,19 @@ workflow {
         }
 
         def enc_dia_targets = no_file
-        if (has_enc_dia) {
-            if (enc_dia_sample_rl != null)      enc_dia_targets = Channel.value(enc_dia_sample_rl)
-            else if (params.blib)               enc_dia_targets = PREPARE_LIBRARY_ENCYCLOPEDIA.out.reference_list_derived
+        if (enc_dia_has_reference_list) {
+            enc_dia_targets = (enc_dia_sample_rl != null)
+                ? Channel.value(enc_dia_sample_rl)
+                : PREPARE_LIBRARY_ENCYCLOPEDIA.out.reference_list_derived
         }
 
         ENCYCLOPEDIA_DIA(by_route.enc_dia, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                      diathem_lib_ch, standard_amts_ch, params.heavy_label,
-                     sample_map_ch, enc_dia_targets, no_file, diathem_ok_enc_dia)
+                     sample_map_ch, enc_dia_targets,
+                     need_library_targets
+                         ? PREPARE_LIBRARY_ENCYCLOPEDIA.out.library_targets
+                         : no_file,
+                     no_file, diathem_ok_enc_dia)
         ENCYCLOPEDIA_PRM(enc_prm_samples, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                      diathem_lib_ch, standard_amts_ch, params.heavy_label,
                      sample_map_ch, enc_prm_targets, no_file, diathem_ok_enc_prm)

@@ -1,6 +1,8 @@
 include { KOINA_PREDICT                           } from '../../modules/local/encyclopedia/koina_predict'
 include { BLIB_TO_DLIB                            } from '../../modules/local/encyclopedia/blib_to_dlib'
 include { BLIB_TO_REFERENCE_LIST                  } from '../../modules/local/encyclopedia/blib_to_reference_list'
+include { DLIB_TO_REFERENCE_LIST                  } from '../../modules/local/encyclopedia/dlib_to_reference_list'
+include { DLIB_TO_REFERENCE_LIST as ELIB_TO_REFERENCE_LIST } from '../../modules/local/encyclopedia/dlib_to_reference_list'
 include { ADD_DECOYS_TO_REFERENCE_LIST               } from '../../modules/local/encyclopedia/add_decoys_to_reference_list'
 include { COMPLETE_CHANNELS                        } from '../../modules/local/library/complete_channels'
 include { EMIT_IRT_LIBRARY                        } from '../../modules/local/library/emit_irt_library'
@@ -22,6 +24,7 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
     background_library
     background_fasta
     background_min_targets
+    need_library_targets
     no_file
 
     main:
@@ -110,8 +113,10 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
     }
 
     def library_ch
+    def library_kind
     if (params.elib && (!params.library_sheet || gpf_is_background)) {
         library_ch = Channel.value(file(params.elib))
+        library_kind = 'elib'
 
     } else if (params.library_sheet && !gpf_is_background) {
         rows = Channel
@@ -146,12 +151,26 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
 
         ENCYCLOPEDIA_LIBEXPORT(pooled, 'chromatogram', dlib_ch, fasta, params.gpf_search_args)
         library_ch = ENCYCLOPEDIA_LIBEXPORT.out.elib
+        library_kind = 'elib'
 
     } else {
         library_ch = dlib_ch
+        library_kind = 'dlib'
+    }
+
+    def library_targets_ch = no_file_ch
+    if (need_library_targets) {
+        if (library_kind == 'elib') {
+            ELIB_TO_REFERENCE_LIST(library_ch, 'elib')
+            library_targets_ch = ELIB_TO_REFERENCE_LIST.out.reference_list
+        } else {
+            DLIB_TO_REFERENCE_LIST(library_ch, 'dlib')
+            library_targets_ch = DLIB_TO_REFERENCE_LIST.out.reference_list
+        }
     }
 
     emit:
     library                 = library_ch
     reference_list_derived  = reference_list_ch
+    library_targets         = library_targets_ch
 }

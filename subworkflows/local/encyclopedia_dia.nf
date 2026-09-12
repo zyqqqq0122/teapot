@@ -17,6 +17,7 @@ workflow ENCYCLOPEDIA_DIA {
     heavy_label
     sample_map
     diathem_targets
+    library_targets
     no_file
     diathem_ok
 
@@ -34,25 +35,25 @@ workflow ENCYCLOPEDIA_DIA {
 
     ASSERT_QUANT_PRODUCTIVE(ENCYCLOPEDIA_LIBEXPORT.out.elib, 'encyclopedia_dia')
 
+    def have_targets     = diathem_targets.name != 'NO_FILE'
+    def have_lib_targets = library_targets.name  != 'NO_FILE'
+    def dia_targets      = have_targets ? diathem_targets : library_targets
+
     def diathem_tsv_ch
-    def have_targets = diathem_targets.name != 'NO_FILE'
-    if (diathem_ok && have_targets) {
+    if (diathem_ok && (have_targets || have_lib_targets)) {
         mzmls_ch = samples
             .filter { _m, f, _ml -> f.getName().toLowerCase() ==~ /.*\.(mzml|mzxml)$/ }
             .map    { _m, f, _ml -> f }
             .collect(sort: true)
         def dia_prior = (diathem_library.name != 'NO_FILE') ? diathem_library : library
-        STRIP_REFERENCE_DECOYS(diathem_targets)
+        STRIP_REFERENCE_DECOYS(dia_targets)
         DIATHEM_QUANT('DIA', mzmls_ch, STRIP_REFERENCE_DECOYS.out.reference_list,
                       dia_prior, sample_map)
         diathem_tsv_ch = DIATHEM_QUANT.out.quant.map { _mode, tsv -> tsv }
     } else {
-        if (diathem_ok && !have_targets) {
-            log.warn "ENCYCLOPEDIA_DIA: skipping DIATHEM_QUANT, no target list. " +
-                     "diathem needs a Skyline/EncyclopeDIA assay (.csv/.tsv/.txt) " +
-                     "or an OpenSWATH .pqp; a .dlib/.elib is not readable as one. " +
-                     "Supply the samplesheet's reference_list column, or --blib so " +
-                     "BLIB_TO_REFERENCE_LIST can derive it."
+        if (diathem_ok) {
+            log.warn "ENCYCLOPEDIA_DIA: skipping DIATHEM_QUANT, no target list " +
+                     "could be derived from the search library."
         }
         diathem_tsv_ch = Channel.value(no_file)
     }
