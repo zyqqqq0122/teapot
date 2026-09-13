@@ -171,3 +171,30 @@ EncyclopeDIA on PRM runs.
 ## License
 
 MIT
+
+## References
+
+### Software
+
+* [Context](https://github.com/shannon225/context)
+* [Context-MS](https://github.com/shannon225/Context-MS)
+* [diathem](https://github.com/statisticalbiotechnology/diathem)
+* [OpenMS](https://github.com/OpenMS/OpenMS)
+* [PyProphet](https://github.com/PyProphet/pyprophet)
+* [msproteomicstools](https://github.com/msproteomicstools/msproteomicstools)
+* [Koina](https://koina.wilhelmlab.org)
+* [Nextflow](https://github.com/nextflow-io/nextflow)
+* [ProteoWizard](https://github.com/ProteoWizard/pwiz)
+
+### Publications
+
+* **EncyclopeDIA.** Searle BC, et al. Chromatogram libraries improve peptide detection and quantification by data independent acquisition mass spectrometry. *Nat Commun* 9, 5128 (2018). [doi:10.1038/s41467-018-07454-w](https://doi.org/10.1038/s41467-018-07454-w)
+* **OpenSWATH.** Röst HL, et al. OpenSWATH enables automated, targeted analysis of data-independent acquisition MS data. *Nat Biotechnol* 32, 219–223 (2014). [doi:10.1038/nbt.2841](https://doi.org/10.1038/nbt.2841)
+* **PyProphet.** Rosenberger G, et al. Statistical control of peptide and protein error rates in large-scale targeted data-independent acquisition analyses. *Nat Methods* 14, 921–927 (2017). [doi:10.1038/nmeth.4398](https://doi.org/10.1038/nmeth.4398)
+* **mProphet.** Reiter L, et al. mProphet: automated data processing and statistical validation for large-scale SRM experiments. *Nat Methods* 8, 430–435 (2011). [doi:10.1038/nmeth.1584](https://doi.org/10.1038/nmeth.1584)
+* **Percolator.** Käll L, et al. Semi-supervised learning for peptide identification from shotgun proteomics datasets. *Nat Methods* 4, 923–925 (2007). [doi:10.1038/nmeth1113](https://doi.org/10.1038/nmeth1113)
+* **TRIC.** Röst HL, et al. TRIC: an automated alignment strategy for reproducible protein quantification in targeted proteomics. *Nat Methods* 13, 777–783 (2016). [doi:10.1038/nmeth.3954](https://doi.org/10.1038/nmeth.3954)
+* **Prosit.** Gessulat S, et al. Prosit: proteome-wide prediction of peptide tandem mass spectra by deep learning. *Nat Methods* 16, 509–518 (2019). [doi:10.1038/s41592-019-0426-7](https://doi.org/10.1038/s41592-019-0426-7)
+* **Koina.** Lautenbacher L, et al. Koina: Democratizing machine learning for proteomics research. *Nat Commun* 16, 9933 (2025). [doi:10.1038/s41467-025-64870-5](https://doi.org/10.1038/s41467-025-64870-5)
+* **Nextflow.** Di Tommaso P, et al. Nextflow enables reproducible computational workflows. *Nat Biotechnol* 35, 316–319 (2017). [doi:10.1038/nbt.3820](https://doi.org/10.1038/nbt.3820)
+* **ProteoWizard.** Chambers MC, et al. A cross-platform toolkit for mass spectrometry and proteomics. *Nat Biotechnol* 30, 918–920 (2012). [doi:10.1038/nbt.2377](https://doi.org/10.1038/nbt.2377)
