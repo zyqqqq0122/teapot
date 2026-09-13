@@ -20,7 +20,7 @@ java_mem:          '32g'
 
 # --- diathem (cross-run quantification) ---------------------------------------
 run_diathem:             true
-diathem_fragment_tol_th: 0.4     # ABSOLUTE Th
+diathem_fragment_tol_th: 0.4     # absolute Th
 diathem_precursor_tol:   0.02    # scheduled PRM centres the window on the target
 diathem_rt_window:       150     # seconds; half the assay's own Window (min)
 

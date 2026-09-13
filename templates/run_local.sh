@@ -8,8 +8,8 @@
 set -euo pipefail
 
 # --- edit these ---------------------------------------------------------------
-TEAPOT_DIR=<path/to/teapot>          # the pipeline checkout
-PARAMS=my_run.yml                    # your copy of a templates/*.yml
+TEAPOT_DIR="<path/to/teapot>"          # the pipeline checkout
+PARAMS=my_run.yml                      # your copy of a templates/*.yml
 # ------------------------------------------------------------------------------
 
 [ -d "$TEAPOT_DIR" ] || { echo "TEAPOT_DIR does not exist: $TEAPOT_DIR" >&2; exit 1; }
@@ -17,20 +17,15 @@ PARAMS=my_run.yml                    # your copy of a templates/*.yml
 grep -q '<' "$PARAMS" && { echo "$PARAMS still has <...> placeholders to fill in" >&2; exit 1; }
 command -v nextflow > /dev/null || { echo "nextflow is not on PATH" >&2; exit 1; }
 
-# Containers. Apptainer is preferred; Docker works too.
-if command -v apptainer > /dev/null || command -v singularity > /dev/null; then
-    ENGINE=apptainer
-elif command -v docker > /dev/null; then
-    ENGINE=docker
-else
-    echo "Need apptainer or docker: every tool runs in a container." >&2
+command -v apptainer > /dev/null || {
+    echo "apptainer not found: every tool runs in an apptainer container." >&2
     exit 1
-fi
+}
 
 mkdir -p results/pipeline_info
 
 nextflow -log "$PWD/results/pipeline_info/nextflow.log" \
     run "$TEAPOT_DIR/main.nf" \
-    -profile "$ENGINE" \
+    -profile apptainer \
     -params-file "$PARAMS" \
     -resume

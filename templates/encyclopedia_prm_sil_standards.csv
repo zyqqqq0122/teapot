@@ -1,3 +1,3 @@
 sample_id,file,mode,reference_list,engine
-plasma_A,/path/to/plasma_A.mzML,DIA,,encyclopedia
-plasma_B,/path/to/plasma_B.mzML,DIA,,encyclopedia
+sample_01,/path/to/sample_01.mzML,DIA,,encyclopedia
+sample_02,/path/to/sample_02.mzML,DIA,,encyclopedia

@@ -14,9 +14,9 @@
 set -euo pipefail
 
 # --- edit these ---------------------------------------------------------------
-TEAPOT_DIR=<path/to/teapot>          # the pipeline checkout
-PARAMS=my_run.yml                    # your copy of a templates/*.yml
-SITE_CONFIG="$TEAPOT_DIR/conf/slurm.config"   # resources; copy and adjust per cluster
+TEAPOT_DIR="<path/to/teapot>"                   # the pipeline checkout
+PARAMS=my_run.yml                               # your copy of a templates/*.yml
+SITE_CONFIG="$TEAPOT_DIR/conf/slurm.config"     # resources; copy and adjust per cluster
 
 # Your cluster's module names. Delete if java and nextflow are already on PATH.
 module load Java/21.0.11-bdist Nextflow/25.10.6-eb
@@ -26,7 +26,6 @@ module load Java/21.0.11-bdist Nextflow/25.10.6-eb
 [ -f "$PARAMS" ]      || { echo "params file not found: $PARAMS" >&2; exit 1; }
 grep -q '<' "$PARAMS" && { echo "$PARAMS still has <...> placeholders to fill in" >&2; exit 1; }
 
-# Keep the head JVM small; the work happens in the child jobs.
 export NXF_OPTS='-Xms512m -Xmx4g'
 
 mkdir -p results/pipeline_info

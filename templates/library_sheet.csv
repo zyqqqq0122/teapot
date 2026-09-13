@@ -1,0 +1,4 @@
+condition,fraction_file
+gpf_pool,/path/to/gpf_fraction_400_500.mzML
+gpf_pool,/path/to/gpf_fraction_500_600.mzML
+gpf_pool,/path/to/gpf_fraction_600_700.mzML
