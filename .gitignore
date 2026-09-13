@@ -3,42 +3,61 @@
 .nextflow.log*
 work/
 results/
+pipeline_info/
 
-# Singularity cache
-.singularity/
+# Container images and their pull cache. Several GB; never committed.
+*.sif
+/apptainer_cache/
+/apptainer_tmp/
+/.singularity/
+
+# Mass-spec data. Inputs live outside the repo
+*.mzML
+*.mzXML
+*.mzML.gz
+*.raw
+*.wiff
+*.wiff.scan
+*.wiff2
+*.d/
+*.lcd
+*.dia
+*.osw
+*.sqMass
+*.elib
+*.dlib
+*.blib
+*.pqp
+*.sky
+
+# Local build toolchain: Maven plus its offline dependency cache (~1.2 GB),
+# used to build contextbook and context.
+/tools/
+
+# Verification scratch
+/.verify/
 
 # Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
-env/
-dist/
-build/
 
-# Conda
-.conda/
-
-# Data files (large binary formats)
-*.mzML
-*.mzXML
-*.raw
-*.d/
-*.wiff
-*.wiff.scan
-*.osw
-*.elib
-*.sqMass
-
-# Logs & reports
-*.log
-pipeline_info/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
+# Editors and OS
 .vscode/
 .idea/
 *.swp
+.DS_Store
+Thumbs.db
+.claude
+
+# tmp
+/Context/
+/contextbook/
+/diathem/
+/openswath/
+/tmp_latest_repo/
+/local/
+/conf/params.*.yml
+/scripts
+/docs
