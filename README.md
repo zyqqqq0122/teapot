@@ -38,6 +38,8 @@ Quantification accuracy improves as more runs are added to a cohort.
 
 ## How TEAPOT works
 
+![How TEAPOT works](figs/how_teapot_works.png)
+
 ### Reference and background peptides
 
 Two terms run through the input templates and the rest of this page.
