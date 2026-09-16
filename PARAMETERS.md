@@ -49,7 +49,7 @@ Supply exactly **one** source. Both engines accept all of these.
 | `library_sheet` | `null` | a CSV of GPF runs; the pipeline builds a chromatogram library from them |
 | `use_koina` | `false` | predict a library from your `fasta` |
 | `koina_models` | `Prosit_2020_HCD;IM2Deep_CCS;Prosit_2019_iRT` | prediction models |
-| `koina_url` | `https://koina.wilhelmlab.org:443/` | the trailing `/` is required |
+| `koina_url` | `https://koina.wilhelmlab.org:443/` | |
 
 OpenSWATH also reads three of its own formats directly:
 

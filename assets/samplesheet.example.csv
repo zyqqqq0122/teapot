@@ -1,5 +1,5 @@
 sample_id,file,mode,reference_list
 dia_sample_01,/data/raw/dia_sample_01.dia,DIA,
 dia_sample_02,/data/raw/dia_sample_02.dia,DIA,
-prm_sample_01,/data/raw/prm_sample_01.dia,PRM,/data/assays/prm_sample_01_assay.txt
-prm_sample_02,/data/raw/prm_sample_02.dia,PRM,/data/assays/prm_sample_02_assay.txt
+prm_sample_01,/data/raw/prm_sample_01.dia,PRM,/data/assays/prm_reference.txt
+prm_sample_02,/data/raw/prm_sample_02.dia,PRM,/data/assays/prm_reference.txt
