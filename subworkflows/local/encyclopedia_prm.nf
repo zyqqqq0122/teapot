@@ -17,15 +17,29 @@ workflow ENCYCLOPEDIA_PRM {
     diathem_library
     standard_amounts
     heavy_label
-    sample_map
     targets_prm
     no_file
     diathem_ok
 
     main:
+    sample_map = samples
+        .map { meta, f, _ml -> "${f.baseName}\t${meta.id}" }
+        .collectFile(name: 'sample_map.enc_prm.tsv', newLine: true, sort: true)
+        .first()
+
     CONTEXT_SEARCH(samples, elib, fasta)
 
     ASSERT_SEARCH_PRODUCTIVE(CONTEXT_SEARCH.out.ref_targets, 'encyclopedia')
+    ASSERT_SEARCH_PRODUCTIVE.out.qc
+        .map { _m, qc -> def l = qc.readLines(); l.size() > 1 ? (l[1].tokenize('\t')[4] as int) : 1 }
+        .collect()
+        .subscribe { n ->
+            if (n.sum() == 0) {
+                error "ASSERT_SEARCH_PRODUCTIVE: no reference peptide at q <= ${params.fdr} in any " +
+                      "of the ${n.size()} runs. Check the search tolerances for your instrument " +
+                      "first; qc/<sample>/ holds each run's report."
+            }
+        }
 
     ENCYCLOPEDIA_LIBEXPORT_PER_SAMPLE(CONTEXT_SEARCH.out.search_products, elib, fasta,
                          params.context_search_args)
@@ -35,20 +49,20 @@ workflow ENCYCLOPEDIA_PRM {
         .flatten()
         .mix(ENCYCLOPEDIA_LIBEXPORT_PER_SAMPLE.out.elib.map { _m, e -> e }.flatten())
         .collect(sort: true)
-    ENCYCLOPEDIA_LIBEXPORT(pooled_prm, 'analysis', elib, fasta, params.context_search_args)
+    ENCYCLOPEDIA_LIBEXPORT(pooled_prm, 'analysis', elib, fasta, params.context_search_args, true)
 
     ASSERT_QUANT_PRODUCTIVE(ENCYCLOPEDIA_LIBEXPORT.out.elib, 'encyclopedia_prm')
 
     def diathem_tsv_ch
     if (diathem_ok) {
         mzmls_ch = samples
-            .filter { _m, f, _ml -> f.getName().toLowerCase() ==~ /.*\.(mzml|mzxml)$/ }
+            .filter { _m, f, _ml -> f.getName().toLowerCase().endsWith('.mzml') }
             .map    { _m, f, _ml -> f }
             .collect(sort: true)
         def dia_prior = (diathem_library.name != 'NO_FILE') ? diathem_library : elib
         STRIP_REFERENCE_DECOYS(targets_prm)
         DIATHEM_QUANT('PRM', mzmls_ch, STRIP_REFERENCE_DECOYS.out.reference_list,
-                      dia_prior, sample_map)
+                      dia_prior, sample_map, 0)
         diathem_tsv_ch = DIATHEM_QUANT.out.quant.map { _mode, tsv -> tsv }
     } else {
         diathem_tsv_ch = Channel.value(no_file)
@@ -62,12 +76,12 @@ workflow ENCYCLOPEDIA_PRM {
                         ENCYCLOPEDIA_LIBEXPORT.out.elib)
 
 
-    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, targets_prm, heavy_label, 'enc_prm')
+    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, targets_prm, fasta, heavy_label, 'enc_prm')
 
     def do_abs = (heavy_label as List)?.size() > 0 &&
                  standard_amounts.name != 'NO_FILE'
     if (do_abs) {
-        QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, standard_amounts,
+        QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, standard_amounts, fasta,
                           heavy_label, params.primary_abundance,
                           params.min_consistency, 'enc_prm')
     }
