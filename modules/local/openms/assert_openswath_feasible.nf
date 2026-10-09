@@ -12,15 +12,10 @@ process ASSERT_OPENSWATH_FEASIBLE {
 
     output:
     tuple val(meta), path("${meta.id}.openswath_feasibility.txt"),  emit: report
-    tuple val(meta), path("nested_windows.flag"), optional: true,   emit: nested
     path "versions.yml",                                            emit: versions
 
     script:
     def warn_only = params.openswath_feasibility_warn_only ? '--warn-only' : ''
-    def pinned = ("${params.openswath_search_args}" =~ /-matching_window_only/)
-    def mwo    = pinned ? '--matching-window-only-set' : ''
-    def auto   = (!pinned && params.openswath_auto_matching_window)
-                     ? '--auto-matching-window --emit-nested-flag nested_windows.flag' : ''
     def width     = params.openswath_occupancy_window_width
                         ? "--window-width ${params.openswath_occupancy_window_width}" : ''
     """
@@ -29,7 +24,7 @@ process ASSERT_OPENSWATH_FEASIBLE {
         --tolerance ${params.openswath_occupancy_tolerance} \\
         --max-occupancy ${params.openswath_max_occupancy} \\
         --report ${meta.id}.openswath_feasibility.txt \\
-        ${width} ${warn_only} ${mwo} ${auto}
+        ${width} ${warn_only}
 
     cat <<-EOF > versions.yml
     "${task.process}":

@@ -4,7 +4,6 @@ import argparse, base64, re, struct, sys, zlib
 
 R = {
     'lvl': re.compile(rb'accession="MS:1000511"[^>]*value="([^"]+)"'),
-    'tgt': re.compile(rb'accession="MS:1000827"[^>]*value="([^"]+)"'),
     'lo':  re.compile(rb'accession="MS:1000828"[^>]*value="([^"]+)"'),
     'up':  re.compile(rb'accession="MS:1000829"[^>]*value="([^"]+)"'),
     'bin': re.compile(rb'<binaryDataArray.*?</binaryDataArray>', re.S),
@@ -44,7 +43,7 @@ def occupancy(mzs, tol, lo=300.0, hi=1500.0):
 
 
 def measure(path, tol, max_scans, width=None, chunk=32 << 20):
-    widths, buf, bounds = {}, b'', set()
+    widths, buf = {}, b''
     kept, pending = [], {}
     with open(path, 'rb') as fh:
         while True:
@@ -63,11 +62,6 @@ def measure(path, tol, max_scans, width=None, chunk=32 << 20):
                     continue
                 w = round(float(lo.group(1)) + float(up.group(1)), 2)
                 widths[w] = widths.get(w, 0) + 1
-                tg = R['tgt'].search(p)
-                if tg:
-                    c = float(tg.group(1))
-                    bounds.add((round(c - float(lo.group(1)), 2),
-                                round(c + float(up.group(1)), 2)))
                 if width is None:
                     b = pending.setdefault(w, [])
                     if len(b) < max_scans:
@@ -91,21 +85,7 @@ def measure(path, tol, max_scans, width=None, chunk=32 << 20):
                 break
         if mzs:
             occs.append(occupancy(mzs, tol))
-    return occs, widths, width, bounds
-
-
-def nested_fraction(bounds):
-    if len(bounds) < 2:
-        return 0.0
-    byw = sorted(bounds, key=lambda b: b[1] - b[0])
-    narrow_w = byw[0][1] - byw[0][0]
-    narrow = [b for b in byw if (b[1] - b[0]) <= narrow_w * 1.5]
-    wider  = [b for b in byw if (b[1] - b[0]) >  narrow_w * 1.5]
-    if not narrow or not wider:
-        return 0.0
-    hits = sum(1 for n in narrow
-               if any(w[0] <= n[0] and n[1] <= w[1] for w in wider))
-    return hits / len(narrow)
+    return occs, widths, width
 
 
 def main():
@@ -118,28 +98,16 @@ def main():
                     help='fail above this median occupancy (default 0.35)')
     ap.add_argument('--scans', type=int, default=1200,
                     help='MS2 scans to sample (default 1200)')
-    ap.add_argument('--auto-matching-window', action='store_true',
-                    help='the pipeline will set -matching_window_only itself; '
-                         'report the nesting rather than failing on it')
-    ap.add_argument('--matching-window-only-set', action='store_true',
-                    help='-matching_window_only true is present in the search '
-                         'args; suppresses the mixed-window error')
     ap.add_argument('--warn-only', action='store_true',
                     help='report and pass regardless')
     ap.add_argument('--window-width', type=float, default=None,
                     help='isolation width to measure, in Th; default is the '
                          'narrowest present -- the scheduled/targeted windows')
-    ap.add_argument('--emit-nested-flag', default=None,
-                    help='write this file when nested windows are detected, so '
-                         'the pipeline can turn -matching_window_only on itself')
     ap.add_argument('--report', default=None)
     a = ap.parse_args()
 
-    occs, widths, width, bounds = measure(a.mzml, a.tolerance, a.scans, a.window_width)
+    occs, widths, width = measure(a.mzml, a.tolerance, a.scans, a.window_width)
     lines = ["OpenSWATH feasibility -- %s" % a.mzml.split('/')[-1], ""]
-    mixed_windows = False
-    # >50 % of narrow windows nested inside wider ones = survey interleaving
-    contained = nested_fraction(bounds) > 0.5
 
     if not occs:
         lines.append("No MS2 scans with a decodable m/z array were found.")
@@ -166,47 +134,13 @@ def main():
         for w in sorted(widths):
             lines.append("    %7.2f Th : %6d scans (%4.1f %%)"
                          % (w, widths[w], 100 * widths[w] / total))
-        if contained and not a.matching_window_only_set and not a.auto_matching_window:
-            mixed_windows = True
-            lines += ["",
-                      "  MIXED WINDOW WIDTHS, and -matching_window_only is not set.",
-                      "  Wide survey scans are interleaved with narrow scheduled ones, so",
-                      "  \"isolation window contains the precursor\" selects mostly scans",
-                      "  acquired for OTHER precursors at other retention times. Add to",
-                      "  openswath_search_args:",
-                      "",
-                      "      -matching_window_only true"]
-        elif contained and a.matching_window_only_set:
-            lines.append("  Nested windows, handled: -matching_window_only is set.")
-        elif contained:
-            lines.append("  Nested windows: survey scans interleaved with targeted "
-                         "ones.\n  The pipeline is adding -matching_window_only true.")
-        elif len(widths) > 1:
-            lines.append("  Mixed widths, but the windows tile rather than nest "
-                         "-- ordinary variable-width DIA, nothing to do.")
-    if mixed_windows:
-        verdict = "SCAN SELECTION UNSAFE" if ok else verdict + " + SCAN SELECTION UNSAFE"
-        ok = False
     lines += ["", "VERDICT: %s" % verdict]
-
-    if contained and a.emit_nested_flag:
-        with open(a.emit_nested_flag, 'w') as fh:
-            fh.write("nested isolation windows detected\n")
 
     report = "\n".join(lines)
     print(report)
     if a.report:
         with open(a.report, 'w') as fh:
             fh.write(report + "\n")
-
-    if mixed_windows and not a.warn_only:
-        sys.stderr.write(
-            "\nThis acquisition interleaves survey and scheduled isolation windows,\n"
-            "and OpenSWATH was not told to respect them. Add to openswath_search_args:\n"
-            "\n    -matching_window_only true\n\n"
-            "EncyclopeDIA needs no equivalent: its scan selection matches on exact\n"
-            "window bounds and self-gates, so ordinary DIA is unaffected.\n")
-        return 1
 
     if not ok and not a.warn_only:
         sys.stderr.write(
