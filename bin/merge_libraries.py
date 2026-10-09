@@ -71,9 +71,16 @@ def main():
     n_secondary_added = 0
     n_secondary_dropped_collision = 0
 
+    best = {}
     for row in src_cur.execute(src_select):
         n_secondary_seen += 1
-        key = (row[3], row[1])  # PeptideSeq, PrecursorCharge
+        key = (row[2], row[1])
+        if key not in best or row[6] < best[key][6]:
+            best[key] = row
+    n_secondary_dropped_repeat = n_secondary_seen - len(best)
+
+    for row in best.values():
+        key = (row[3], row[1])
         if key in primary_keys:
             n_secondary_dropped_collision += 1
             continue
@@ -107,6 +114,9 @@ def main():
     print(f"primary entries kept:        {n_primary} unique (PeptideSeq, "
           f"PrecursorCharge) keys", file=sys.stderr)
     print(f"secondary entries seen:      {n_secondary_seen}", file=sys.stderr)
+    print(f"secondary dropped repeat:    {n_secondary_dropped_repeat} "
+          f"(another run's entry of the same precursor scored better)",
+          file=sys.stderr)
     print(f"secondary added:             {n_secondary_added}", file=sys.stderr)
     print(f"secondary dropped collision: {n_secondary_dropped_collision}",
           file=sys.stderr)
