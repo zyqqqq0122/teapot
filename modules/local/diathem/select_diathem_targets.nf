@@ -6,7 +6,7 @@ process SELECT_DIATHEM_TARGETS {
 
     publishDir path: { "${params.outdir}/diathem_quant/DIA" },
                mode: params.publish_mode,
-               saveAs: { fn -> fn.startsWith('prior/') ? null : fn }
+               saveAs: { fn -> fn.startsWith('prior/') || fn == 'rt_window.txt' ? null : fn }
 
     input:
     path ids,     stageAs: 'ids/*'
@@ -18,6 +18,7 @@ process SELECT_DIATHEM_TARGETS {
     output:
     path "diathem_targets.csv",        emit: targets
     path "prior/*", optional: true,    emit: prior
+    path "rt_window.txt",              emit: rt_window
     path "select_diathem_targets.log", emit: log
     path "versions.yml",               emit: versions
 
@@ -35,6 +36,7 @@ process SELECT_DIATHEM_TARGETS {
         --unimod ${unimod} \\
         --out diathem_targets.csv \\
         --prior-out-dir prior \\
+        --rt-window-out rt_window.txt \\
         2>&1 | tee select_diathem_targets.log
 
     cat <<-EOF > versions.yml
@@ -47,6 +49,7 @@ process SELECT_DIATHEM_TARGETS {
     stub:
     """
     touch diathem_targets.csv select_diathem_targets.log
+    echo 60 > rt_window.txt
     echo '"${task.process}": {python: stub}' > versions.yml
     """
 }

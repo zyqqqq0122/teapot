@@ -55,7 +55,8 @@ workflow OPENSWATH_DIA {
         SELECT_DIATHEM_TARGETS(pp_tsvs, 'pyprophet', no_file, dia_prior,
                                file("${projectDir}/assets/unimod_delta_masses.tsv"))
         DIATHEM_QUANT('DIA', mzmls_ch, SELECT_DIATHEM_TARGETS.out.targets,
-                      SELECT_DIATHEM_TARGETS.out.prior.ifEmpty(no_file), sample_map, 180)
+                      SELECT_DIATHEM_TARGETS.out.prior.ifEmpty(no_file), sample_map,
+                      SELECT_DIATHEM_TARGETS.out.rt_window.map { f -> f.text.trim() })
         diathem_tsv_ch = DIATHEM_QUANT.out.quant.map { _mode, tsv -> tsv }
     } else {
         diathem_tsv_ch = Channel.value(no_file)

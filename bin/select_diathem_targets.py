@@ -2,6 +2,7 @@
 import argparse
 import csv
 import glob
+import math
 import os
 import re
 import sqlite3
@@ -10,6 +11,20 @@ import sys
 
 
 UNIMOD = re.compile(r"\(UniMod:(\d+)\)")
+
+# Basis: the window covers how far apart the runs put the same precursor, taken over the
+# precursors identified in two or more runs. The 99.9th percentile of that, plus 30 s for
+# the peak, and at least 60 s.
+# Single runs and sparse data: with one run it’s 60 s. If fewer than 20 precursors are
+# found in more than one run, it stays at 180 s.
+# Likely wrong identifications are left out first: an identification counts as out of line
+# when it sits more than 10 robust standard deviations from its run’s typical shift
+RT_QUANTILE = 0.999
+RT_OUTLIER = 10
+RT_PEAK = 30
+RT_MIN = 60
+RT_MIN_SHARED = 20
+RT_UNMEASURED = 180
 
 
 def read_tsv(path):
@@ -34,7 +49,7 @@ def from_encyclopedia(paths, fdr):
                 continue
             head, z = r["PSMId"].rsplit("+", 1)
             _file, rt, pf = head.rsplit(":", 2)
-            hits.setdefault((pf, int(z)), []).append(float(rt))
+            hits.setdefault((pf, int(z)), {})[p] = float(rt)
             n += 1
         print(f"{os.path.basename(p)}: {n} precursors at q <= {fdr}", file=sys.stderr)
     return hits
@@ -80,7 +95,7 @@ def from_pyprophet(paths, fdr, deltas):
                 skipped.add(r["FullPeptideName"])
                 continue
             key = (pf, int(float(r["Charge"])))
-            hits.setdefault(key, []).append(float(r["RT"]))
+            hits.setdefault(key, {})[p] = float(r["RT"])
             mz.setdefault(key, float(r["mz"]))
             n += 1
         print(f"{os.path.basename(p)}: {n} precursors at q <= {fdr}", file=sys.stderr)
@@ -88,6 +103,40 @@ def from_pyprophet(paths, fdr, deltas):
         print(f"skipped {len(skipped)} peptidoform(s) whose modification has no "
               f"[+delta] form diathem can read, e.g. {sorted(skipped)[:3]}", file=sys.stderr)
     return hits, mz
+
+
+def rt_window(hits, n_runs):
+    if n_runs == 1:
+        return RT_MIN, "one run: each target is read around the RT it was identified at"
+    multi = {k: rts for k, rts in hits.items() if len(rts) > 1}
+    shifts = {}
+    for k, rts in multi.items():
+        c = statistics.median(rts.values())
+        for run, rt in rts.items():
+            shifts.setdefault(run, []).append((k, rt - c))
+    out = set()
+    for run, ks in shifts.items():
+        if len(ks) < RT_MIN_SHARED:
+            continue
+        d = [x for _, x in ks]
+        m = statistics.median(d)
+        sd = max(1.0, 1.4826 * statistics.median(abs(x - m) for x in d))   # MAD as an SD
+        out.update((k, run) for k, x in ks if abs(x - m) > RT_OUTLIER * sd)
+    spread = []
+    for k, rts in multi.items():
+        kept = [rt for run, rt in rts.items() if (k, run) not in out]
+        if len(kept) > 1:
+            spread.append(max(kept) - min(kept))
+    if len(spread) < RT_MIN_SHARED:
+        return RT_UNMEASURED, (f"only {len(spread)} precursor(s) identified in two or more "
+                               f"runs, too few to measure how far RTs move between runs")
+    spread.sort()
+    p = spread[int(RT_QUANTILE * (len(spread) - 1))]
+    return max(RT_MIN, math.ceil(p + RT_PEAK)), (
+        f"99.9 % of the {len(spread)} precursors identified in two or more runs lie within "
+        f"{p:.1f} s across runs, leaving out {len(out)} identification(s) more than "
+        f"{RT_OUTLIER} robust SDs from their run's median shift; plus {RT_PEAK} s for the "
+        f"peak, at least {RT_MIN} s")
 
 
 def bare(pf):
@@ -142,6 +191,7 @@ def main():
     ap.add_argument("--unimod", required=True, help="assets/unimod_delta_masses.tsv")
     ap.add_argument("--out", required=True)
     ap.add_argument("--prior-out-dir", required=True)
+    ap.add_argument("--rt-window-out", required=True, help="file for diathem's --rt-window")
     a = ap.parse_args()
 
     paths = sorted(p for p in glob.glob(os.path.join(a.ids, "*")) if os.path.isfile(p))
@@ -172,9 +222,14 @@ def main():
         w.writerow(["Compound", "m/z", "z", "RT Time (min)"])
         for (pf, z) in sorted(hits):
             w.writerow([pf, "%.6f" % mz[(pf, z)], z,
-                        "%.4f" % (statistics.median(hits[(pf, z)]) / 60.0)])
+                        "%.4f" % (statistics.median(hits[(pf, z)].values()) / 60.0)])
     print(f"wrote {len(hits)} target precursor(s) identified in at least one of "
           f"{len(paths)} run(s) to {a.out}", file=sys.stderr)
+
+    rtw, why = rt_window(hits, len(paths))
+    with open(a.rt_window_out, "w") as f:
+        f.write(f"{rtw}\n")
+    print(f"RT window: +/-{rtw} s ({why})", file=sys.stderr)
 
     if a.prior and os.path.basename(a.prior) != "NO_FILE":
         os.makedirs(a.prior_out_dir, exist_ok=True)
