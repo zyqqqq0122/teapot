@@ -8,7 +8,7 @@ process EXTRACT_OPENSWATH_INTENSITY {
                mode: params.publish_mode
 
     input:
-    tuple val(meta), path(reference_list), path(osw)
+    tuple val(meta), path(reference_list), path(osw), path(peptide_table)
 
     output:
     tuple val(meta), path("${meta.id}.osw_intensity.tsv"), emit: intensity
@@ -18,30 +18,22 @@ process EXTRACT_OPENSWATH_INTENSITY {
     script:
     """
     python3 - <<'PY' > ${meta.id}.extract.log 2>&1
-    import sqlite3, sys, csv
+    import sqlite3, sys, csv, re
 
     OSW = "${osw}"
+    IDS = "${peptide_table}"
     OUT = "${meta.id}.osw_intensity.tsv"
 
+    chosen = set()
+    with open(IDS) as f:
+        for r in csv.DictReader(f, delimiter='\\t'):
+            m = re.match(r'f(-?\\d+)_', r.get('SpecId') or '')
+            if m: chosen.add(int(m.group(1)))
+
     con = sqlite3.connect(OSW)
-    cur = con.cursor()
-
-    def has_column(table, col):
-        for r in con.execute(f"PRAGMA table_info({table})"):
-            if r[1].lower() == col.lower():
-                return True
-        return False
-
-    order = ""
-    if has_column('SCORE_MS2', 'SCORE'):
-        joins = "LEFT JOIN SCORE_MS2 SC ON SC.FEATURE_ID = F.ID"
-        order = "ORDER BY SC.SCORE DESC NULLS LAST, FMS2.AREA_INTENSITY DESC"
-    else:
-        joins = ""
-        order = "ORDER BY FMS2.AREA_INTENSITY DESC"
-
-    sql = f'''
-      SELECT P.UNMODIFIED_SEQUENCE AS stripped_seq,
+    sql = '''
+      SELECT F.ID                  AS feature_id,
+             P.UNMODIFIED_SEQUENCE AS stripped_seq,
              P.MODIFIED_SEQUENCE   AS peptidoform,
              PRE.CHARGE            AS charge,
              P.DECOY               AS decoy,
@@ -52,26 +44,24 @@ process EXTRACT_OPENSWATH_INTENSITY {
       JOIN PEPTIDE P                     ON P.ID              = PPM.PEPTIDE_ID
       JOIN PRECURSOR PRE                 ON PRE.ID            = F.PRECURSOR_ID
       JOIN FEATURE_MS2 FMS2              ON FMS2.FEATURE_ID   = F.ID
-      {joins}
-      {order}
     '''
-    seen = set()
-    rows = []
+    best = {}
     for r in con.execute(sql):
-        key = (r[1], int(r[2]), int(r[3] or 0))
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append(r)
+        key = (r[2], int(r[3]), int(r[4] or 0))
+        rank = (r[0] in chosen, r[6] or 0.0)
+        if key not in best or rank > best[key][0]:
+            best[key] = (rank, r[1:])
     con.close()
 
     with open(OUT, 'w', newline='') as f:
         w = csv.writer(f, delimiter='\\t')
         w.writerow(['stripped_seq', 'peptidoform', 'charge', 'decoy',
                     'rt_apex_seconds', 'abundance_openswath'])
-        w.writerows(rows)
+        w.writerows(row for _rank, row in best.values())
 
-    print(f"rows written: {len(rows)}", file=sys.stderr)
+    n_id = sum(1 for rank, _row in best.values() if rank[0])
+    print(f"precursors written: {len(best)}; {n_id} from the feature the FDR step "
+          f"identified, the rest from their largest peak", file=sys.stderr)
     PY
 
     cat <<-EOF > versions.yml
