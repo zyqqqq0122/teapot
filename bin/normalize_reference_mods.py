@@ -10,8 +10,6 @@ MOD = re.compile(r"\[([+-]?\d+(?:\.\d+)?)\]")
 
 
 def key(modseq):
-    """(stripped sequence, ((position, mass rounded to 0.1), ...)); position 0
-    holds an n-terminal modification, residue i holds position i (1-based)."""
     seq, mods, pos, i = [], [], 0, 0
     while i < len(modseq):
         c = modseq[i]
