@@ -12,7 +12,7 @@ process OPENSWATH_WORKFLOW {
     path  library
     path  irt_library, stageAs: 'irt_lib_input/*'
     path  full_window_flag, stageAs: 'full_window/*'
-    path  nested_flag, stageAs: 'nested_windows/*'
+    val   matching_window_only
 
     output:
     tuple val(meta), path(reference_list), path("${mzml.baseName}.osw"),  emit: osw
@@ -28,16 +28,15 @@ process OPENSWATH_WORKFLOW {
         irt_arg     = '-tr_irt irt_lib.TraML'
     }
     def search_args = Args.flat(params.openswath_search_args)
+    def search_args_no_ms1 = (search_args.replaceAll(/-enable_ms1\s+\S+/, '') + ' -enable_ms1 false').trim()
     def force_full_window = ''
     if (basename(full_window_flag) != 'NO_FILE') {
         force_full_window = '-rt_extraction_window -1'
     }
     def warn_full_window = force_full_window ? 'true' : 'false'
-    def matching_window = (basename(nested_flag) != 'NO_FILE') ? '-matching_window_only true' : ''
-    def warn_matching_window = matching_window ? 'true' : 'false'
+    def pinned = (search_args =~ /-matching_window_only\b/)
+    def matching_window = (matching_window_only && !pinned) ? '-matching_window_only true' : ''
     """
-    # Fail on a broken pipeline, not just a broken last stage: every command
-    # below is piped into `tee`, whose success would otherwise hide theirs.
     set -o pipefail
 
     if [ "${warn_full_window}" = "true" ]; then
@@ -46,21 +45,32 @@ process OPENSWATH_WORKFLOW {
 
     ${irt_convert}
 
-    OpenSwathWorkflow \\
-        -in     ${mzml} \\
-        -tr     ${library} \\
-        ${irt_arg} \\
-        -out_features ${mzml.baseName}.osw \\
-        -threads ${task.cpus} \\
-        ${search_args} \\
-        ${force_full_window} \\
-        2>&1 | tee ${meta.id}.openswath.log
+    openswath() {
+        OpenSwathWorkflow \\
+            -in     ${mzml} \\
+            -tr     ${library} \\
+            ${irt_arg} \\
+            -out_features ${mzml.baseName}.osw \\
+            -threads ${task.cpus} \\
+            "\$@" \\
+            ${force_full_window} \\
+            ${matching_window} \\
+            2>&1 | tee ${meta.id}.openswath.log
+    }
+
+    if grep -q -m1 -E 'MS:1000511"[^>]*value="1"' ${mzml}; then
+        openswath ${search_args}
+    else
+        echo "OPENSWATH_WORKFLOW: ${mzml} has no MS1 scan; MS1 scoring is off" >&2
+        openswath ${search_args_no_ms1}
+    fi
 
     cat <<-EOF > versions.yml
     "${task.process}":
       openms: \$( (OpenSwathWorkflow --helphelp 2>&1 | grep -m1 -i '^Version:') || echo 'Version: unknown')
       tr_irt: ${irt_library.name}
       full_window_override: ${basename(full_window_flag) != 'NO_FILE'}
+      matching_window_only: ${matching_window ? 'true' : (pinned ? 'set in openswath_search_args' : 'false')}
     EOF
     """
 
