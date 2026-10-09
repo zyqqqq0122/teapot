@@ -4,7 +4,7 @@ process BLIB_TO_REFERENCE_LIST {
 
     container "${params.python_container}"
 
-    publishDir path: { "${params.outdir}/prepare_library_openswath" },
+    publishDir path: { "${params.outdir}/prepare_library" },
                mode: params.publish_mode
 
     input:
