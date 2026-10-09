@@ -85,6 +85,11 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         m = _psm_chg_re.search(str(v))
         return int(m.group(1)) if m else 0
 
+    _psm_rt_re = re.compile(r':(\\d+(?:\\.\\d*)?):')
+    def rt_from_psmid(v):
+        m = _psm_rt_re.search(str(v))
+        return float(m.group(1)) if m else float('nan')
+
     def dedupe_accessions(v):
         s = str(v or '').strip()
         if not s: return ''
@@ -124,7 +129,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         con = sqlite3.connect(ELIB)
         try:
             pq = pd.read_sql_query("SELECT PeptideModSeq, PrecursorCharge, SourceFile, "
-                                   "TotalIntensity FROM peptidequants", con)
+                                   "TotalIntensity, RTInSecondsCenter FROM peptidequants", con)
             try:
                 p2p = pd.read_sql_query("SELECT PeptideSeq, ProteinAccession FROM "
                                         "peptidetoprotein WHERE isDecoy = 0", con)
@@ -141,19 +146,25 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             pq['sample_id']    = pq['SourceFile'].astype(str).apply(sid_from_path)
             pq = pq.rename(columns={'TotalIntensity': 'abundance_encyclopedia'})
             pq['charge'] = pd.to_numeric(pq['PrecursorCharge'], errors='coerce').fillna(0).astype(int)
-            enc_fb = (pq.groupby(['sample_id','stripped_seq','channel','charge'], as_index=False)
+            keys = ['sample_id','stripped_seq','channel','charge']
+            enc_fb = (pq.groupby(keys, as_index=False)
                         .agg(abundance_encyclopedia=('abundance_encyclopedia','max'),
                              peptidoform=('peptidoform','first')))
+            top = pq.loc[pq.groupby(keys)['abundance_encyclopedia'].idxmax(),
+                         keys + ['RTInSecondsCenter']]
+            enc_fb = enc_fb.merge(top.rename(columns={'RTInSecondsCenter': 'rt_encyclopedia_seconds'}),
+                                  on=keys, how='left')
             enc_fb['protein'] = (enc_fb['stripped_seq'].map(pep2prot).fillna('')
                                  .apply(dedupe_accessions))
             quant_rows.append(enc_fb[['sample_id','peptidoform','stripped_seq','charge',
-                                      'channel','protein','abundance_encyclopedia']])
+                                      'channel','protein','abundance_encyclopedia',
+                                      'rt_encyclopedia_seconds']])
             print(f"abundance read from {ELIB} peptidequants: {len(enc_fb)} rows "
                   f"(charge-resolved)", file=sys.stderr)
 
     enc = pd.concat(quant_rows, ignore_index=True) if quant_rows else pd.DataFrame(
         columns=['sample_id','peptidoform','stripped_seq','charge','channel',
-                 'protein','abundance_encyclopedia'])
+                 'protein','abundance_encyclopedia','rt_encyclopedia_seconds'])
 
     id_rows = []
     for pth in sorted(glob.glob('enc/*.encyclopedia.txt')):
@@ -162,6 +173,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             t = pd.read_csv(pth, sep='\\t')
         except Exception as e:
             print(f"skip {pth}: {e}", file=sys.stderr); continue
+        t = t[~t.iloc[:, 0].astype(str).str.startswith('pi_0=')]
         if t.empty: continue
         pep  = next((c for c in t.columns
                      if c.lower() in ('peptidemodseq','modifiedsequence','peptide','peptidoform')), None)
@@ -169,31 +181,39 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
                      if c.lower() in ('precursorcharge','charge')), None)
         q    = next((c for c in t.columns if c.lower() in ('qvalue','q-value','q_value')), None)
         perr = next((c for c in t.columns if c.lower() in ('posterior_error_prob','posterior_error_probability','pep')), None)
+        psm  = next((c for c in t.columns if c.lower() == 'psmid'), t.columns[0])
         if pep is None: continue
         id_rows.append(pd.DataFrame({
             'sample_id':    sid,
             'peptidoform':  t[pep].astype(str),
             'stripped_seq': t[pep].astype(str).apply(strip_mods),
             'charge':       (t[chg].astype(int) if chg
-                             else t[t.columns[0]].apply(charge_from_psmid)),
+                             else t[psm].apply(charge_from_psmid)),
             'id_qvalue':    t[q] if q else pd.NA,
             'id_pep':       t[perr] if perr else pd.NA,
+            'rt_apex_seconds': t[psm].apply(rt_from_psmid),
         }).assign(channel=lambda d: d['peptidoform'].apply(channel_of)))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
         columns=['sample_id','peptidoform','stripped_seq','charge','id_qvalue',
-                 'id_pep','channel'])
+                 'id_pep','rt_apex_seconds','channel'])
 
     if os.path.basename(DIA_TSV) == 'NO_FILE' or not os.path.getsize(DIA_TSV):
         dia = pd.DataFrame(columns=['sample_id','peptidoform','charge','channel',
                                     'stripped_seq','abundance_diathem',
-                                    'consistency','n_effective_transitions'])
+                                    'consistency','n_effective_transitions',
+                                    'rt_diathem_seconds'])
     else:
         dia = pd.read_csv(DIA_TSV, sep='\\t')
-        dia = dia.rename(columns={'run_id': 'sample_id', 'abundance': 'abundance_diathem'})
+        if 'is_decoy' in dia.columns:
+            dia = dia[pd.to_numeric(dia['is_decoy'], errors='coerce').fillna(0) == 0]
+        dia = dia.rename(columns={'run_id': 'sample_id', 'abundance': 'abundance_diathem',
+                                  'rt_apex_seconds': 'rt_diathem_seconds'})
+        if 'rt_diathem_seconds' not in dia.columns: dia['rt_diathem_seconds'] = pd.NA
         dia['stripped_seq'] = dia['peptidoform'].apply(strip_mods)
         dia['channel']      = dia['peptidoform'].apply(channel_of)
         dia = dia[['sample_id','peptidoform','charge','channel','stripped_seq',
-                   'abundance_diathem','consistency','n_effective_transitions']]
+                   'abundance_diathem','consistency','n_effective_transitions',
+                   'rt_diathem_seconds']]
 
     enc_and_ids = enc.merge(ids, on=['sample_id','stripped_seq','charge','channel'],
                              how='outer', suffixes=('_enc','_id'))
@@ -217,7 +237,8 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         base.loc[_blank, 'protein'] = (base.loc[_blank, 'stripped_seq']
                                          .map(pep2prot).fillna(''))
     for c in ['abundance_openswath','abundance_diathem','abundance_encyclopedia',
-              'abundance_tric','consistency','n_effective_transitions','rt_apex_seconds']:
+              'abundance_tric','consistency','n_effective_transitions','rt_apex_seconds',
+              'rt_encyclopedia_seconds','rt_diathem_seconds']:
         if c not in base.columns: base[c] = pd.NA
 
     METHODS = ['encyclopedia','openswath','diathem','tric']
@@ -241,6 +262,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
+            'rt_encyclopedia_seconds','rt_diathem_seconds',
             'id_qvalue','id_pep','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
