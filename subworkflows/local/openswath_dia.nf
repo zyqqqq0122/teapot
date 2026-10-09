@@ -5,6 +5,7 @@ include { PYPROPHET_LEARN           } from '../../modules/local/pyprophet/pyprop
 include { PYPROPHET_APPLY           } from '../../modules/local/pyprophet/pyprophet_apply'
 include { PYPROPHET_EXPORT          } from '../../modules/local/pyprophet/pyprophet_export'
 include { DIATHEM_QUANT             } from '../../modules/local/diathem/diathem_quant'
+include { SELECT_DIATHEM_TARGETS    } from '../../modules/local/diathem/select_diathem_targets'
 include { MERGE_QUANT_OPENSWATH_DIA } from '../../modules/local/quant/merge_quant_openswath_dia'
 include { FINALIZE_QUANT            } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT         } from '../../modules/local/quant/quantify_heavy_light'
@@ -16,18 +17,21 @@ workflow OPENSWATH_DIA {
     library
     irt_library
     full_window_flag
-    fasta
+    spectral_library
     diathem_library
     standard_amounts
     heavy_label
-    sample_map
     no_file
     diathem_ok
+    fasta
 
     main:
-    def nested_ch = Channel.value(no_file)
+    sample_map = samples
+        .map { meta, f, _ml -> "${f.baseName}\t${meta.id}" }
+        .collectFile(name: 'sample_map.osw_dia.tsv', newLine: true, sort: true)
+        .first()
 
-    OPENSWATH_WORKFLOW(samples, library, irt_library, full_window_flag, nested_ch)
+    OPENSWATH_WORKFLOW(samples, library, irt_library, full_window_flag, false)
 
     n_runs_ch = OPENSWATH_WORKFLOW.out.osw.count()
     PYPROPHET_SUBSAMPLE(OPENSWATH_WORKFLOW.out.osw, n_runs_ch)
@@ -39,20 +43,23 @@ workflow OPENSWATH_DIA {
     PYPROPHET_APPLY(OPENSWATH_WORKFLOW.out.osw, PYPROPHET_LEARN.out.model)
     PYPROPHET_EXPORT(PYPROPHET_APPLY.out.scored)
 
+    pp_tsvs = PYPROPHET_EXPORT.out.tsv.map { _m, _ml, tsv -> tsv }.collect(sort: true)
+
     def diathem_tsv_ch
     if (diathem_ok) {
         mzmls_ch = samples
-            .filter { _m, f, _ml -> f.getName().toLowerCase() ==~ /.*\.(mzml|mzxml)$/ }
+            .filter { _m, f, _ml -> f.getName().toLowerCase().endsWith('.mzml') }
             .map    { _m, f, _ml -> f }
             .collect(sort: true)
-        def dia_prior = (diathem_library.name != 'NO_FILE') ? diathem_library : library
-        DIATHEM_QUANT('DIA', mzmls_ch, library, dia_prior, sample_map)
+        def dia_prior = (diathem_library.name != 'NO_FILE') ? diathem_library : spectral_library
+        SELECT_DIATHEM_TARGETS(pp_tsvs, 'pyprophet', no_file, dia_prior,
+                               file("${projectDir}/assets/unimod_delta_masses.tsv"))
+        DIATHEM_QUANT('DIA', mzmls_ch, SELECT_DIATHEM_TARGETS.out.targets,
+                      SELECT_DIATHEM_TARGETS.out.prior.ifEmpty(no_file), sample_map, 180)
         diathem_tsv_ch = DIATHEM_QUANT.out.quant.map { _mode, tsv -> tsv }
     } else {
         diathem_tsv_ch = Channel.value(no_file)
     }
-
-    pp_tsvs = PYPROPHET_EXPORT.out.tsv.map { _m, _ml, tsv -> tsv }.collect(sort: true)
 
     def tric_tsv_ch
     if (params.run_tric) {
@@ -66,12 +73,12 @@ workflow OPENSWATH_DIA {
                         heavy_label, params.primary_abundance)
 
 
-    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, heavy_label, 'osw_dia')
+    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, fasta, heavy_label, 'osw_dia')
 
     def do_abs = (heavy_label as List)?.size() > 0 &&
                  standard_amounts.name != 'NO_FILE'
     if (do_abs) {
-        QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_OPENSWATH_DIA.out.long, standard_amounts,
+        QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_OPENSWATH_DIA.out.long, standard_amounts, fasta,
                           heavy_label, params.primary_abundance,
                           params.min_consistency, 'osw_dia')
     }

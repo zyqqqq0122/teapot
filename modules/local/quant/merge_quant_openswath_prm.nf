@@ -14,7 +14,6 @@ process MERGE_QUANT_OPENSWATH_PRM {
     path sample_map
     val  heavy_label
     val  primary
-    path elib, stageAs: 'enc_elib/*'
 
     output:
     path "base_quant.long.tsv",         emit: long
@@ -41,7 +40,6 @@ process MERGE_QUANT_OPENSWATH_PRM {
     import pandas as pd, glob, os, re, json, sys
 
     DIA_TSV    = "${diathem_tsv}"
-    ELIB       = "${elib}"
     SAMPLE_MAP = "${sample_map}"
     LABEL      = json.loads(r'''${label_json}''')
     MTOL       = float("${mod_tol}")
@@ -120,72 +118,46 @@ process MERGE_QUANT_OPENSWATH_PRM {
             'sample_id':    sid,
             'peptide':      t[pep_col].astype(str),
             'stripped_seq': t[pep_col].astype(str).apply(strip_mods),
+            'channel':      t[pep_col].astype(str).apply(channel_of),
             'protein':      t[prot_col].astype(str),
             'id_qvalue':    t[q_col] if q_col else pd.NA,
             'id_pep':       t[perr_col] if perr_col else pd.NA,
             'peak_group_rank': t[rank_col] if rank_col else pd.NA,
         }))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
-        columns=['sample_id','peptide','stripped_seq','protein','id_qvalue','id_pep',
-                 'peak_group_rank'])
+        columns=['sample_id','peptide','stripped_seq','channel','protein','id_qvalue',
+                 'id_pep','peak_group_rank'])
 
     if os.path.basename(DIA_TSV) == 'NO_FILE' or not os.path.getsize(DIA_TSV):
         dia = pd.DataFrame(columns=['sample_id','peptidoform','charge','channel',
                                     'stripped_seq','abundance_diathem',
-                                    'consistency','n_effective_transitions'])
+                                    'consistency','n_effective_transitions',
+                                    'rt_diathem_seconds'])
     else:
         dia = pd.read_csv(DIA_TSV, sep='\\t')
+        if 'is_decoy' in dia.columns:
+            dia = dia[pd.to_numeric(dia['is_decoy'], errors='coerce').fillna(0) == 0]
         dia = dia.rename(columns={'run_id': 'sample_id',
-                                   'abundance': 'abundance_diathem'})
+                                   'abundance': 'abundance_diathem',
+                                   'rt_apex_seconds': 'rt_diathem_seconds'})
         dia['stripped_seq'] = dia['peptidoform'].apply(strip_mods)
         dia['channel']      = dia['peptidoform'].apply(channel_of)
+        if 'rt_diathem_seconds' not in dia.columns: dia['rt_diathem_seconds'] = pd.NA
         dia = dia[['sample_id','peptidoform','charge','channel','stripped_seq',
-                   'abundance_diathem','consistency','n_effective_transitions']]
-
-    import sqlite3
-    enc_cols = ['sample_id','stripped_seq','charge','channel',
-                'peptidoform','abundance_encyclopedia']
-    if os.path.basename(ELIB) != 'NO_FILE' and os.path.exists(ELIB) and os.path.getsize(ELIB):
-        con = sqlite3.connect(ELIB)
-        try:
-            pq = pd.read_sql_query("SELECT PeptideModSeq, PrecursorCharge, "
-                                   "SourceFile, TotalIntensity FROM peptidequants", con)
-        finally:
-            con.close()
-    else:
-        pq = pd.DataFrame(columns=['PeptideModSeq','PrecursorCharge','SourceFile','TotalIntensity'])
-    if not pq.empty:
-        stem2sid = dict(zip(sm['mzml_stem'], sm['sample_id']))
-        pq['peptidoform']  = pq['PeptideModSeq'].astype(str)
-        pq['stripped_seq'] = pq['PeptideModSeq'].astype(str).apply(strip_mods)
-        pq['charge']       = pd.to_numeric(pq['PrecursorCharge'], errors='coerce').fillna(0).astype(int)
-        pq['channel']      = pq['peptidoform'].apply(channel_of)
-        pq['sample_id']    = pq['SourceFile'].astype(str).apply(
-            lambda s: stem2sid.get(os.path.splitext(os.path.basename(s))[0],
-                                   os.path.splitext(os.path.basename(s))[0]))
-        pq = pq.rename(columns={'TotalIntensity': 'abundance_encyclopedia'})
-        enc = (pq.groupby(['sample_id','stripped_seq','charge','channel'], as_index=False)
-                 .agg(abundance_encyclopedia=('abundance_encyclopedia','max'),
-                      peptidoform=('peptidoform','first')))[enc_cols]
-    else:
-        enc = pd.DataFrame(columns=enc_cols)
+                   'abundance_diathem','consistency','n_effective_transitions',
+                   'rt_diathem_seconds']]
 
     key = ['sample_id','stripped_seq','charge','channel']
     base = osw.merge(dia, on=key, how='outer', suffixes=('_osw','_dia'))
     base['peptidoform'] = base['peptidoform_osw'].fillna(base['peptidoform_dia'])
     base = base.drop(columns=[c for c in ['peptidoform_osw','peptidoform_dia'] if c in base.columns])
 
-    base = base.merge(enc, on=key, how='outer', suffixes=('', '_enc'))
-    if 'peptidoform_enc' in base.columns:
-        base['peptidoform'] = base['peptidoform'].fillna(base['peptidoform_enc'])
-        base = base.drop(columns=['peptidoform_enc'])
-
-    base = base.merge(ids, on=['sample_id','stripped_seq'], how='outer')
+    base = base.merge(ids, on=['sample_id','stripped_seq','channel'], how='outer')
     base['peptide'] = base['peptide'].fillna(base['peptidoform'])
 
     for c in ['abundance_openswath','abundance_diathem','abundance_encyclopedia',
               'abundance_tric','consistency','n_effective_transitions',
-              'rt_apex_seconds']:
+              'rt_apex_seconds','rt_diathem_seconds']:
         if c not in base.columns: base[c] = pd.NA
     base['channel'] = base['channel'].fillna('light')
 
@@ -209,7 +181,7 @@ process MERGE_QUANT_OPENSWATH_PRM {
     cols = ['sample_id','peptide','peptidoform','charge','channel','protein',
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
-            'consistency','n_effective_transitions','rt_apex_seconds',
+            'consistency','n_effective_transitions','rt_apex_seconds','rt_diathem_seconds',
             'id_qvalue','id_pep','peak_group_rank','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
