@@ -49,6 +49,8 @@ process PYPROPHET_TO_PSM {
     pep_prob = pick('pep', 'posterior_error_prob')
     dec_col  = pick('decoy')
     id_col   = pick('transition_group_id', 'SpecId', 'id')
+    fid_col  = pick('id')
+    chg_col  = pick('Charge', 'charge')
     rt_col   = pick('RT', 'rt')
     if pep_col is None or q_col is None:
         sys.exit(f"PYPROPHET_TO_PSM: cannot find peptide/q-value columns in {EXP}")
@@ -77,8 +79,15 @@ process PYPROPHET_TO_PSM {
           f"(targets {int((sub._decoy == 0).sum())}, decoys {int((sub._decoy == 1).sum())})",
           file=sys.stderr)
 
+    if fid_col and chg_col:
+        spec_id = ('f' + sub[fid_col].astype(str) + '_' + sub[pep_col].astype(str) + '_'
+                   + pd.to_numeric(sub[chg_col], errors='coerce').fillna(0).astype(int).astype(str))
+    elif id_col:
+        spec_id = sub[id_col].astype(str)
+    else:
+        spec_id = [f"{SID}:{i}" for i in range(len(sub))]
     out = pd.DataFrame({
-        'SpecId': sub[id_col].astype(str) if id_col else [f"{SID}:{i}" for i in range(len(sub))],
+        'SpecId': spec_id,
         'ScanNr': pd.to_numeric(sub[rt_col], errors='coerce').fillna(0).astype(int) if rt_col else 0,
         'score':  pd.to_numeric(sub[s_col], errors='coerce') if s_col else 0.0,
         'q-value': pd.to_numeric(sub[q_col], errors='coerce'),

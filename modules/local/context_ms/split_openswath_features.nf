@@ -85,6 +85,7 @@ process SPLIT_OPENSWATH_FEATURES {
         JOIN PEPTIDE P                     ON P.ID              = PPM.PEPTIDE_ID
         JOIN PRECURSOR PRE                 ON PRE.ID            = F.PRECURSOR_ID
         {joins}
+        ORDER BY PRE.TRAML_ID, F.EXP_RT
     '''
     df = pd.read_sql_query(sql, con)
     print(f"features loaded: {len(df)}", file=sys.stderr)
