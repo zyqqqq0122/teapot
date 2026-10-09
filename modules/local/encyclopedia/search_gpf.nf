@@ -22,14 +22,14 @@ process SEARCH_GPF {
         -i ${combined} \\
         -l ${dlib} \\
         -f ${fasta} \\
-        ${Args.flat(params.gpf_search_args)} \\
+        ${Args.flat(params.sheet_search_args)} \\
         2>&1 | tee ${meta.condition}.search_gpf.log
 
     cat <<-EOF > versions.yml
     "${task.process}":
       encyclopedia:      \$(java -jar ${params.encyclopedia_jar} -version 2>&1 | head -n1)
       condition:         ${meta.condition}
-      gpf_search_args:   '${params.gpf_search_args}'
+      sheet_search_args: '${params.sheet_search_args}'
     EOF
     """
 

@@ -1,0 +1,6 @@
+condition,fraction_file
+qc_01,/path/to/qc_01.mzML
+qc_02,/path/to/qc_02.mzML
+qc_03,/path/to/qc_03.mzML
+qc_04,/path/to/qc_04.mzML
+qc_05,/path/to/qc_05.mzML

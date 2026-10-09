@@ -13,9 +13,7 @@ include { OPENSWATH_ASSAY_GENERATOR               } from '../../modules/local/op
 include { OPENSWATH_DECOY_GENERATOR               } from '../../modules/local/openms/openswath_decoy_generator'
 include { PREPARE_BACKGROUND                      } from './prepare_background'
 include { KOINA_PREDICT                           } from '../../modules/local/encyclopedia/koina_predict'
-include { MERGE_GPF             as OPENSWATH_MERGE_GPF      } from '../../modules/local/encyclopedia/merge_gpf'
-include { SEARCH_GPF            as OPENSWATH_SEARCH_GPF     } from '../../modules/local/encyclopedia/search_gpf'
-include { ENCYCLOPEDIA_LIBEXPORT as OPENSWATH_GPF_LIBEXPORT } from '../../modules/local/encyclopedia/encyclopedia_libexport'
+include { PREPARE_CHROMATOGRAM_LIBRARY            } from './prepare_chromatogram_library'
 
 workflow PREPARE_LIBRARY_OPENSWATH {
     take:
@@ -38,7 +36,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
     def reference_list_ch = no_file_ch
     def irt_library_ch    = no_file_ch
     def full_window_ch    = no_file_ch
-    def enc_lib_ch        = no_file_ch
+    def spectral_lib_ch   = no_file_ch
 
     if (params.openswath_pqp) {
         library_ch = Channel.value(file(params.openswath_pqp))
@@ -54,12 +52,6 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                 log.warn "PREPARE_LIBRARY_OPENSWATH: heavy_label is set but --openswath_tsv/--openswath_traml " +
                          "passes through as-is. COMPLETE_CHANNELS only operates on " +
                          "blib/dlib libraries; ensure your TSV contains both channels."
-            }
-            if (has_bg) {
-                log.warn "PREPARE_LIBRARY_OPENSWATH: --openswath_tsv/--openswath_traml passes through; " +
-                         "MERGE_LIBRARIES and HARMONIZE_RT are dlib/blib-only. " +
-                         "Ensure your TSV already contains the background union " +
-                         "in a coherent RT space."
             }
             tsv_ch = Channel.value(file(osw_native))
             if (params.irt_library) {
@@ -104,8 +96,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
 
             def dlib_ch
             if (has_bg) {
-                PREPARE_BACKGROUND(fasta, background_source,
-                                   background_library, background_fasta)
+                PREPARE_BACKGROUND(background_source, background_library, background_fasta)
                 HARMONIZE_RT_BACKGROUND(PREPARE_BACKGROUND.out.dlib,
                                         anchors_ch, 'background',
                                         false, false)
@@ -123,24 +114,16 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                     .first()
                     .ifEmpty(no_file)
             } else {
-                if (run_channel) {
-                    log.warn "PREPARE_LIBRARY_OPENSWATH: --openswath_blib + heavy_label " +
-                             "without a background library will produce " +
-                             "reference_list == library and zero background " +
-                             "targets in SPLIT_OPENSWATH_FEATURES. Set background_source " +
-                             "to 'koina' | 'dlib' | 'blib' | 'elib' | 'gpf'."
-                }
                 dlib_ch = HARMONIZE_RT_TARGET.out.library
                 full_window_ch = HARMONIZE_RT_TARGET.out.full_window
                     .ifEmpty(no_file)
             }
 
-            enc_lib_ch = dlib_ch
+            spectral_lib_ch = dlib_ch
             DLIB_TO_OPENSWATH_TSV(dlib_ch, unimod_ch)
             tsv_ch = DLIB_TO_OPENSWATH_TSV.out.tsv
 
-        } else if (params.use_koina || params.dlib || params.elib ||
-                   (params.library_sheet && background_source != 'gpf')) {
+        } else if (params.use_koina || params.dlib || params.elib || params.library_sheet) {
             def has_user_irt      = params.irt_library && params.irt_anchors
             def has_user_only_lib = params.irt_library && !params.irt_anchors
             def has_ref_anchors   = reference_list_for_anchors &&
@@ -188,7 +171,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
             }
 
             def src_lib_ch
-            if (params.library_sheet && background_source != 'gpf') {
+            if (params.library_sheet) {
                 def seed_ch
                 if (params.dlib) {
                     seed_ch = Channel.value(file(params.dlib))
@@ -196,29 +179,11 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                     KOINA_PREDICT(fasta)
                     seed_ch = KOINA_PREDICT.out.dlib
                 } else {
-                    error "PREPARE_LIBRARY_OPENSWATH: --library_sheet needs a seed " +
-                          "spectral library. Supply --dlib or --use_koina."
+                    error "PREPARE_LIBRARY_OPENSWATH: --library_sheet needs a library to search " +
+                          "its runs with: --dlib, or --use_koina to predict one from --fasta."
                 }
-                gpf_rows = Channel
-                    .fromPath(params.library_sheet)
-                    .splitCsv(header: true)
-                    .map { row -> tuple(row.condition, file(row.fraction_file)) }
-                    .groupTuple(by: 0)
-                    .map { condition, fractions -> tuple([condition: condition], fractions) }
-                gpf_split = gpf_rows.branch { _meta, fs ->
-                    single: fs.size() == 1
-                    multi:  fs.size() > 1
-                }
-                OPENSWATH_MERGE_GPF(gpf_split.multi)
-                gpf_combined = OPENSWATH_MERGE_GPF.out.combined
-                    .mix(gpf_split.single.map { meta, fs -> tuple(meta, fs[0]) })
-                OPENSWATH_SEARCH_GPF(gpf_combined.map { meta, c -> tuple(meta, c, fasta) }, seed_ch)
-                gpf_pooled = OPENSWATH_SEARCH_GPF.out.products
-                    .map { _meta, files -> files }
-                    .flatten()
-                    .collect()
-                OPENSWATH_GPF_LIBEXPORT(gpf_pooled, 'chromatogram_osw', seed_ch, fasta, params.gpf_search_args)
-                src_lib_ch = OPENSWATH_GPF_LIBEXPORT.out.elib
+                PREPARE_CHROMATOGRAM_LIBRARY(params.library_sheet, seed_ch, fasta, 'chromatogram_osw')
+                src_lib_ch = PREPARE_CHROMATOGRAM_LIBRARY.out.elib
 
             } else if (params.elib) {
                 src_lib_ch = Channel.value(file(params.elib))
@@ -256,8 +221,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
 
             def dlib2_ch
             if (has_bg) {
-                PREPARE_BACKGROUND(fasta, background_source,
-                                   background_library, background_fasta)
+                PREPARE_BACKGROUND(background_source, background_library, background_fasta)
                 HARMONIZE_RT_BACKGROUND(PREPARE_BACKGROUND.out.dlib,
                                         anchors2_ch, 'background',
                                         false, false)
@@ -274,7 +238,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                 dlib2_ch = HARMONIZE_RT_TARGET.out.library
             }
 
-            enc_lib_ch = dlib2_ch
+            spectral_lib_ch = dlib2_ch
             DLIB_TO_OPENSWATH_TSV(dlib2_ch, unimod_ch)
             tsv_ch = DLIB_TO_OPENSWATH_TSV.out.tsv
 
@@ -298,5 +262,5 @@ workflow PREPARE_LIBRARY_OPENSWATH {
     reference_list_derived  = reference_list_ch
     irt_library             = irt_library_ch
     full_window_flag        = full_window_ch
-    encyclopedia_library    = enc_lib_ch
+    spectral_library        = spectral_lib_ch
 }

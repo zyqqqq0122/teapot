@@ -67,7 +67,7 @@ process ASSERT_QUANT_PRODUCTIVE {
             "  The pipeline inherits -ftol/-frag from the search args for you -- "
             "check the 'inherited search args' line at the top of the libexport "
             "log. If it says (none), set dia_search_args / context_search_args / "
-            "gpf_search_args for this run, e.g. '-ftol 0.4 -ftolunits AMU "
+            "sheet_search_args for this run, e.g. '-ftol 0.4 -ftolunits AMU "
             "-lftol 0.4 -lftolunits AMU -frag HCD'." % (ENGINE, total))
 
     if frac > MAX_ZERO:
