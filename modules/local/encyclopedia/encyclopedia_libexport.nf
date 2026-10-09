@@ -11,6 +11,7 @@ process ENCYCLOPEDIA_LIBEXPORT {
     path library
     path fasta
     val  search_args
+    val  quantify_all
 
     output:
     path "${output_basename}.elib",                        emit: elib
@@ -23,6 +24,7 @@ process ENCYCLOPEDIA_LIBEXPORT {
     def jar_fp = Fingerprint.of(params.encyclopedia_jar)
     def inherited = Args.inherit(search_args)
     def extra     = Args.flat(params.libexport_args)
+    def keep_all  = quantify_all && !(extra =~ /-percolatorThreshold\b/) ? '-percolatorThreshold 1' : ''
     """
     exec > >(tee -a ${output_basename}.libexport.log) 2>&1
 
@@ -30,6 +32,7 @@ process ENCYCLOPEDIA_LIBEXPORT {
     echo "==> encyclopedia jar: ${params.encyclopedia_jar} [${jar_fp}]"
     echo "==> inherited search args: ${inherited ?: '(none)'}"
     echo "==> libexport_args:        ${extra ?: '(none)'}"
+    echo "==> quantify every scored peptide: ${keep_all ? 'yes' : 'no'}"
 
     java -Xmx${params.java_mem} -cp ${params.encyclopedia_jar} \\
         edu.washington.gs.maccoss.encyclopedia.Encyclopedia \\
@@ -38,7 +41,7 @@ process ENCYCLOPEDIA_LIBEXPORT {
         -i . \\
         -l ${library} \\
         -f ${fasta} \\
-        ${inherited} ${extra}
+        ${inherited} ${keep_all} ${extra}
 
     cat <<-EOF > versions.yml
     "${task.process}":
@@ -46,6 +49,7 @@ process ENCYCLOPEDIA_LIBEXPORT {
       basename:        '${output_basename}'
       inherited_args:  '${inherited}'
       libexport_args:  '${extra}'
+      quantify_all:    ${keep_all ? 'true' : 'false'}
     EOF
     """
 
