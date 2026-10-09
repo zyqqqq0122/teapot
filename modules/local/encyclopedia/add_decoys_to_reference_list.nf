@@ -28,7 +28,7 @@ process ADD_DECOYS_TO_REFERENCE_LIST {
     cat <<-EOF > versions.yml
     "${task.process}":
       encyclopedia: \$(java -jar ${params.encyclopedia_jar} -version 2>&1 | head -n1)
-      generator: MassListDecoyGenerator (PeptideUtils.getSmartDecoy)
+      generator: MassListDecoyGenerator (PeptideUtils.reverse)
     EOF
     """
 
