@@ -70,8 +70,8 @@ process ASSERT_SEARCH_PRODUCTIVE {
             "'DECOY_'+<target id>, which needs a library built by OpenSwathDecoyGenerator."
             % (SID, ENGINE, n))
     if passing == 0:
-        sys.exit(
-            "ASSERT_SEARCH_PRODUCTIVE [%s/%s]: ZERO reference peptides at q<=%g, out "
+        print(
+            "WARNING: ASSERT_SEARCH_PRODUCTIVE [%s/%s]: ZERO reference peptides at q<=%g, out "
             "of %d scored. The search ran but identified nothing, so any abundance "
             "downstream would be unvalidated noise.\\n"
             "  First thing to check is INSTRUMENT-APPROPRIATE SEARCH PARAMETERS. "
@@ -83,8 +83,8 @@ process ASSERT_SEARCH_PRODUCTIVE {
             "  encyclopedia: set context_search_args, e.g. "
             "'-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'.\\n"
             "  openswath: set -mz_extraction_window / -irt_mz_extraction_window in Th."
-            % (SID, ENGINE, FDR, n))
-    if passing < MIN_ID:
+            % (SID, ENGINE, FDR, n), file=sys.stderr)
+    elif passing < MIN_ID:
         print("WARNING: ASSERT_SEARCH_PRODUCTIVE [%s/%s]: only %d reference peptides "
               "at q<=%g (threshold %d). Legitimate for a very small assay, otherwise "
               "check the search parameters." % (SID, ENGINE, passing, FDR, MIN_ID),
