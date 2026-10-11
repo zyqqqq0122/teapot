@@ -6,10 +6,14 @@ fasta:  <path/to/proteins.fasta>
 outdir: results
 
 # --- Library ---
-# Heavy-only vendor .blib is fine; the light channel is synthesised. A large
-# background COSTS identifications here, hence 'none'.
+# Heavy-only vendor .blib is fine; the light channel is synthesised.
 blib:              <path/to/vendor_standards.blib>
+
+# --- Background ---
 background_source: none
+# background_source: measured
+# background_sheet:  <path/to/background_sheet.csv>   # as templates/background_sheet.csv
+# background_fasta:  <path/to/proteins_of_your_samples.fasta>
 
 # --- Heavy/light pairing ------------------------------------------------------
 heavy_label:
@@ -34,10 +38,16 @@ rt_harmonize_min_anchor_coverage: 0.8
 # TSV/CSV mapping peptide -> known heavy pmol.
 standard_amounts: <path/to/standard_amounts.csv>
 min_consistency:  0.0        # LOD gate on diathem-based absolute quant
+# A light and its heavy standard elute together: a pair whose two peaks lie
+# further apart than this gets no amount.
+pair_rt_tolerance_seconds: 9
 
 # --- Instrument (ion trap) -------------------
+# -frag HCD: EncyclopeDIA uses y ions only (-frag CID: b and y), whatever the
+# instrument's fragmentation.
 dia_search_args:     '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'
 context_search_args: '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'
+sheet_search_args:   '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'   # runs in background_sheet, if any
 
 fdr:               0.01
 primary_abundance: encyclopedia
@@ -45,8 +55,6 @@ java_mem:          '32g'
 
 run_diathem:             true
 diathem_fragment_tol_th: 0.4
-diathem_precursor_tol:   0.02
-diathem_rt_window:       150
 
 # cluster_options:     '-A <your-slurm-account>'
 # container_cache_dir: /path/to/shared/apptainer_cache

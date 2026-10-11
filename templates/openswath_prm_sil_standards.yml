@@ -39,18 +39,15 @@ rt_harmonize_min_anchor_coverage: 0.8
 # --- Absolute amounts ---------------------------------------------------------
 standard_amounts: <path/to/standard_amounts.csv>
 min_consistency:  0.0
+# A light and its heavy standard elute together: a pair whose two peaks lie
+# further apart than this gets no amount.
+pair_rt_tolerance_seconds: 9
 
 # --- Extraction ---------------------------------------------------------------
-# LOAD-BEARING on ion-trap data: every window must be 0.4 Th.
-#
-# -matching_window_only matters: scheduled PRM interleaves narrow targeted
-# windows with wide survey scans, and without it a precursor is scored against
-# scans acquired for a different precursor.
 openswath_assaygen_args: '-min_transitions 6 -max_transitions 10'
 openswath_decoygen_args: ''
 openswath_search_args: >
   -force
-  -matching_window_only true
   -mz_extraction_window 0.4 -mz_extraction_window_unit Th
   -irt_mz_extraction_window 0.4 -irt_mz_extraction_window_unit Th
   -mz_extraction_window_ms1 0.4 -mz_extraction_window_ms1_unit Th
@@ -80,8 +77,6 @@ java_mem:          '32g'
 
 run_diathem:             true
 diathem_fragment_tol_th: 0.4
-diathem_precursor_tol:   0.02
-diathem_rt_window:       150
 run_tric:                false
 
 # cluster_options:     '-A <your-slurm-account>'

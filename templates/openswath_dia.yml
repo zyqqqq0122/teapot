@@ -6,9 +6,8 @@ input:  <path/to/samplesheet.csv>          # openswath_dia.csv
 fasta:  <path/to/proteins.fasta>
 outdir: results
 
-use_koina:        true
+use_koina:        true          # predicts the library from fasta
 koina_models:     'Prosit_2020_HCD;IM2Deep_CCS;Prosit_2019_iRT'
-background_fasta: <path/to/proteome.fasta>
 
 # High-resolution DIA defaults. Tighten for Orbitrap, widen for ion trap.
 openswath_search_args: >

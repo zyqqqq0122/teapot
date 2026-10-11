@@ -12,7 +12,10 @@ background_source: none
 
 # --- Instrument ---
 # LOAD-BEARING on an ion trap. Delete only if MS2 is high-resolution.
+# -frag HCD: EncyclopeDIA uses y ions only (-frag CID: b and y), whatever the
+# instrument's fragmentation.
 context_search_args: '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'
+sheet_search_args:   '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'   # runs in background_sheet, if any
 
 fdr:               0.01
 primary_abundance: encyclopedia
@@ -21,8 +24,6 @@ java_mem:          '32g'
 # --- diathem (cross-run quantification) ---------------------------------------
 run_diathem:             true
 diathem_fragment_tol_th: 0.4     # absolute Th
-diathem_precursor_tol:   0.02    # scheduled PRM centres the window on the target
-diathem_rt_window:       150     # seconds; half the assay's own Window (min)
 
 # --- Cluster ------------------------------------------------------------------
 # Only needed with -profile hpc. Also settable in conf/hpc.config.

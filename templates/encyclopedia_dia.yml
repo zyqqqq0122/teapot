@@ -9,15 +9,16 @@ outdir: results
 elib: <path/to/chromatogram_library.elib>
 # use_koina:        true
 # koina_models:     'Prosit_2020_HCD;IM2Deep_CCS;Prosit_2019_iRT'
-# koina_url:        'https://koina.wilhelmlab.org:443/'   # the trailing slash matters
-# background_fasta: <path/to/proteome.fasta>
+# koina_url:        'https://koina.wilhelmlab.org:443/'
 
 background_source: none
 
 # --- Instrument ---------------------------------------------------------------
-# These are ION-TRAP values. For a high-resolution Orbitrap MS2, delete the line
-# and let EncyclopeDIA use its own defaults (10 ppm, CID).
+# These are ION-TRAP values. For a high-resolution Orbitrap MS2, delete the lines
+# and let EncyclopeDIA use its own defaults (10 ppm, CID). -frag HCD: EncyclopeDIA
+# uses y ions only (-frag CID: b and y), whatever the instrument's fragmentation.
 dia_search_args: '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'
+sheet_search_args: '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'   # runs in background_sheet, if any
 
 fdr:               0.01
 primary_abundance: encyclopedia
