@@ -14,13 +14,18 @@ PARAMS=my_run.yml                      # your copy of a templates/*.yml
 
 [ -d "$TEAPOT_DIR" ] || { echo "TEAPOT_DIR does not exist: $TEAPOT_DIR" >&2; exit 1; }
 [ -f "$PARAMS" ]     || { echo "params file not found: $PARAMS" >&2; exit 1; }
-grep -q '<' "$PARAMS" && { echo "$PARAMS still has <...> placeholders to fill in" >&2; exit 1; }
+grep -qE '^[^#]*<[A-Za-z0-9_ ./-]+>' "$PARAMS" &&
+    { echo "$PARAMS still has <...> placeholders to fill in" >&2; exit 1; }
 command -v nextflow > /dev/null || { echo "nextflow is not on PATH" >&2; exit 1; }
 
 command -v apptainer > /dev/null || {
     echo "apptainer not found: every tool runs in an apptainer container." >&2
     exit 1
 }
+
+export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-$TEAPOT_DIR/apptainer_cache/layers}"
+export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$TEAPOT_DIR/apptainer_tmp}"
+mkdir -p "$APPTAINER_CACHEDIR" "$APPTAINER_TMPDIR"
 
 mkdir -p results/pipeline_info
 

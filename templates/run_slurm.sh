@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -J teapot
 #SBATCH -n 2
-#SBATCH --mem 8G
+#SBATCH --mem 16G
 #SBATCH -t 2-00:00:00
 #SBATCH -o head.%j.out
 #SBATCH -e head.%j.err
@@ -24,9 +24,14 @@ module load Java/21.0.11-bdist Nextflow/25.10.6-eb
 
 [ -d "$TEAPOT_DIR" ]  || { echo "TEAPOT_DIR does not exist: $TEAPOT_DIR" >&2; exit 1; }
 [ -f "$PARAMS" ]      || { echo "params file not found: $PARAMS" >&2; exit 1; }
-grep -q '<' "$PARAMS" && { echo "$PARAMS still has <...> placeholders to fill in" >&2; exit 1; }
+grep -qE '^[^#]*<[A-Za-z0-9_ ./-]+>' "$PARAMS" &&
+    { echo "$PARAMS still has <...> placeholders to fill in" >&2; exit 1; }
 
 export NXF_OPTS='-Xms512m -Xmx4g'
+
+export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-$TEAPOT_DIR/apptainer_cache/layers}"
+export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$TEAPOT_DIR/apptainer_tmp}"
+mkdir -p "$APPTAINER_CACHEDIR" "$APPTAINER_TMPDIR"
 
 mkdir -p results/pipeline_info
 
