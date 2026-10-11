@@ -9,6 +9,7 @@ include { ENCYCLOPEDIA_PRM             } from './subworkflows/local/encyclopedia
 include { OPENSWATH_DIA                } from './subworkflows/local/openswath_dia'
 include { OPENSWATH_PRM                } from './subworkflows/local/openswath_prm'
 include { MSCONVERT                    } from './modules/local/msconvert/msconvert'
+include { REMOVE_SURVEY_SCANS          } from './modules/local/runs/remove_survey_scans'
 include { ADD_DECOYS_TO_REFERENCE_LIST } from './modules/local/encyclopedia/add_decoys_to_reference_list'
 include { NORMALIZE_REFERENCE_MODS     } from './modules/local/library/normalize_reference_mods'
 
@@ -16,36 +17,47 @@ include { NORMALIZE_REFERENCE_MODS     } from './modules/local/library/normalize
 def helpMessage() {
     log.info """
     Usage:
-      nextflow run main.nf --input samplesheet.csv --fasta proteins.fasta [options]
+      nextflow run main.nf -profile apptainer -params-file my_run.yml
+      nextflow run main.nf -profile apptainer --input samplesheet.csv --fasta proteins.fasta [settings]
 
-    Samplesheet columns (CSV with header):
-      sample_id   unique identifier
-      file        path to raw MS file: .raw | .mzML | .mzXML | .dia (encyclopedia only)
-      mode        DIA | PRM
-      reference_list   path to assay .txt/.csv defining the reference peptide
-                       set for PRM (used by SPLIT_OPENSWATH_FEATURES / CONTEXT_SEARCH
-                       to partition features into reference vs background;
-                       ignored for DIA). `reference_list` is accepted as a
-                       deprecated alias. May be left empty when a vendor
-                       .blib is provided. The pipeline derives it via
-                       BLIB_TO_REFERENCE_LIST.
-      engine      encyclopedia | openswath  (optional, defaults to encyclopedia)
+    Start from templates/: a samplesheet (.csv) and settings (.yml) for your kind of
+    data, and a launcher, run_local.sh or run_slurm.sh. README.md says which to use.
+    A setting goes in the .yml as name: value, or on the command line as --name value.
 
-    Quantification (all engines/modes):
-      Base output at results/base_quant/<engine>_<mode>/ has multi-abundance
-      columns: abundance_openswath, abundance_encyclopedia, abundance_diathem,
-      abundance_tric (when populated), plus abundance_primary chosen by
-      --primary_abundance. Non-populated columns are NA.
+    The samplesheet (--input) is a CSV with one row per run and the header
+    sample_id,file,mode,reference_list,engine:
+      sample_id       your name for the run
+      file            the run: .mzML, .mzXML (engine openswath only), .dia (engine
+                      encyclopedia only), or a vendor file the pipeline converts:
+                      .raw, .wiff, .wiff2, .d, .lcd
+      mode            PRM or DIA
+      reference_list  your reference peptides, in the isolation-list layout Skyline
+                      exports, the same file for every run of an engine and mode.
+                      Left empty, it is derived from the library when that is a
+                      .blib. PRM needs one or the other; DIA without either reports
+                      the peptides it detects. openswath does not use it on DIA.
+      engine          encyclopedia (the default) or openswath
 
-      --primary_abundance   openswath | encyclopedia | diathem | tric
-                            Which column feeds layer-3 calibration.
-      --run_diathem         true|false. Off skips diathem; other columns unaffected.
-      --diathem_library     Optional .elib/.dlib/.blib for diathem f_prior.
-      --min_consistency     LOD gate on diathem-based abs quant (0..1, default 0).
+    Some settings (all of them in PARAMETERS.md):
+      --primary_abundance   whose amounts fill the abundance column, and the SIL
+                            amounts: diathem (the default), encyclopedia, openswath
+                            or tric
+      --run_diathem         also quantify with diathem: true (the default) or false
+      --diathem_library     a library for diathem to take each peptide's expected
+                            fragment intensities from, instead of the assay library
+      --heavy_label         SIL runs: the heavy labels, as in [{site: K, unimod:
+                            'UniMod:259'}, {site: R, unimod: 'UniMod:267'}]. Empty,
+                            the default, for label-free runs
+      --standard_amounts    SIL runs: a CSV of the known amount (pmol) of each heavy
+                            standard, by peptide or by protein
+      --pair_rt_tolerance_seconds
+                            SIL runs: a light/heavy pair whose two peaks lie further
+                            apart than this many seconds does not count (default 9;
+                            0 = off)
+      --min_consistency     SIL runs: leave out of the amounts every measurement
+                            whose diathem consistency is below this (default 0: none)
 
-    DIA absolute quantitation (spike-in):
-      --heavy_label         List of { residue, unimod } rules. Default SILAC.
-      --standard_amounts    TSV/CSV mapping peptide -> known heavy pmol.
+    INPUTS.md describes every input file, OUTPUTS.md every result.
     """.stripIndent()
 }
 
@@ -68,24 +80,11 @@ def reference_list_has_decoys(rl) {
 workflow {
     if (!params.input || !params.fasta) { helpMessage(); exit 1 }
 
-    def missing_assets = ['NO_FILE', 'unimod_delta_masses.tsv', 'masslist-decoys.jar']
+    def missing_assets = ['NO_FILE', 'unimod_delta_masses.tsv', 'masslist-decoys.jar', 'wine_cpus_online']
         .findAll { !file("${projectDir}/assets/${it}").exists() }
     if (missing_assets) {
         error "Pre-flight: missing shipped asset(s) in ${projectDir}/assets: " +
               missing_assets.join(', ')
-    }
-
-    def renamed = [
-        'channel_complete_ion_types':           'complete_channels_ion_types',
-        'channel_complete_max_frag_charge':     'complete_channels_max_frag_charge',
-        'channel_complete_tolerance_ppm':       'complete_channels_tolerance_ppm',
-        'channel_complete_coverage_hard_floor': 'complete_channels_coverage_hard_floor',
-        'channel_complete_coverage_warn_below': 'complete_channels_coverage_warn_below',
-        'channel_complete_skip_proteins':       'complete_channels_skip_proteins',
-    ].findAll { old, _new -> params.containsKey(old) }
-    if (renamed) {
-        error "Pre-flight: renamed param(s):\n" +
-              renamed.collect { o, n -> "  ${o} -> ${n}" }.join('\n')
     }
 
     def hasPlaceholder
@@ -103,9 +102,6 @@ workflow {
 
     def rows = file(params.input).splitCsv(header: true)
     def ref_of = { r -> r.reference_list?.trim() ?: '' }
-    if (rows && rows.any { it.containsKey('mass_list') } && !rows[0].containsKey('reference_list')) {
-        error "samplesheet: the 'mass_list' column was renamed to 'reference_list'."
-    }
     def sig  = { r -> [ (r.engine?.trim() ?: 'encyclopedia').toLowerCase(),
                         r.mode.toUpperCase() ] }
     def routes = rows.collect(sig) as Set
@@ -118,13 +114,75 @@ workflow {
     def osw_labels = has_osw ? (params.heavy_label ?: []) : []
 
     def bg_source = params.background_source
-    if (params.background_koina && bg_source == 'none') {
-        log.warn "background_koina is deprecated; use background_source='koina'"
-        bg_source = 'koina'
+    if (!(bg_source in ['none', 'measured', 'predicted', 'library'])) {
+        error "background_source must be one of none, measured, predicted, library, got: '${bg_source}'"
     }
-    def valid_bg_sources = ['none','koina','dlib','blib','elib','gpf']
-    if (!(bg_source in valid_bg_sources)) {
-        error "background_source must be one of ${valid_bg_sources}, got: '${bg_source}'"
+    def bg_files = ['background_library', 'background_fasta', 'background_peptides',
+                    'background_sheet', 'background_search_library']
+    def bg_blib  = params.background_library &&
+                   params.background_library.toString().toLowerCase().endsWith('.blib')
+    def bg_needs = [none:      [],
+                    library:   ['background_library'] + (bg_blib ? ['background_fasta'] : []),
+                    predicted: ['background_fasta'],
+                    measured:  ['background_sheet', 'background_fasta']]
+    def bg_takes = [none:      [],
+                    library:   bg_needs.library,
+                    predicted: ['background_fasta', 'background_peptides'],
+                    measured:  ['background_sheet', 'background_fasta', 'background_search_library']]
+    if (bg_source == 'measured' && params.background_library) {
+        error "Pre-flight: background_library is a background you already have, for background_source: " +
+              "library. To search the background_sheet runs with a library, give it as " +
+              "background_search_library."
+    }
+    if (bg_source == 'library' && params.background_search_library) {
+        error "Pre-flight: background_search_library is what the runs of a measured background are " +
+              "searched with. A background you already have is background_library."
+    }
+    def bg_missing = bg_needs[bg_source].findAll { !params[it] }
+    if (bg_missing) {
+        error "Pre-flight: background_source '${bg_source}' needs ${bg_missing.join(' and ')}. " +
+              ('background_fasta' in bg_missing && bg_blib
+                  ? " A .blib is placed in proteins by a FASTA: entries no FASTA entry holds are dropped." : '')
+    }
+    def bg_unused = bg_files.findAll { params[it] && !(it in bg_takes[bg_source]) }
+    if (bg_unused) {
+        error "Pre-flight: ${bg_unused.join(' and ')} ${bg_unused.size() > 1 ? 'are' : 'is'} set, but background_source '${bg_source}' " +
+              "does not use ${bg_unused.size() > 1 ? 'them' : 'it'}."
+    }
+    bg_files.findAll { params[it] && !file(params[it]).exists() }.each {
+        error "Pre-flight: ${it}: ${params[it]} does not exist."
+    }
+    ['background_library', 'background_search_library'].findAll { params[it] }.each {
+        if (!(params[it].toString().toLowerCase() ==~ /.*\.(elib|dlib|blib)$/)) {
+            error "Pre-flight: ${it} must be an .elib, .dlib or .blib, got: ${params[it]}"
+        }
+    }
+    if (!((params.background_peptides_top as String).isInteger() && (params.background_peptides_top as int) > 0)) {
+        error "background_peptides_top must be a positive whole number, got '${params.background_peptides_top}'."
+    }
+
+    ['library_sheet', 'background_sheet'].findAll { params[it] }.each { k ->
+        if (!file(params[k]).exists()) {
+            error "Pre-flight: ${k}: ${params[k]} does not exist."
+        }
+        def sheet_rows = file(params[k]).splitCsv(header: true)
+        if (!sheet_rows || !['condition', 'fraction_file'].every { sheet_rows[0].containsKey(it) }) {
+            error "Pre-flight: ${k} ${params[k]} needs the columns condition and fraction_file, " +
+                  "and a row per run file (templates/library_sheet.csv)."
+        }
+        sheet_rows.each { r ->
+            def f = r.fraction_file?.trim()
+            if (!r.condition?.trim() || !f) {
+                error "Pre-flight: ${k}: every row needs a condition and a fraction_file."
+            }
+            if (!file(f).exists()) {
+                error "Pre-flight: ${k}: ${f} does not exist."
+            }
+            if (!(f.toLowerCase() ==~ /.*\.(mzml|dia|raw|wiff2?|d|lcd)$/)) {
+                error "Pre-flight: ${k}: ${f}: the runs must be mzML, EncyclopeDIA .dia, or a vendor " +
+                      "format the pipeline converts (.raw, .wiff, .wiff2, .d, .lcd)."
+            }
+        }
     }
 
     def enc_prm_uses_derived = has_enc_prm && params.blib && rows.any {
@@ -149,90 +207,184 @@ workflow {
             which scores target vs decoy within the search and needs no
             background at all.
 
-            Configure a background source:
-              background_source = 'koina'  + background_fasta  (proteome FASTA)
-              background_source = 'blib'   + background_library  (background .blib)
-              background_source = 'dlib'   + background_library  (background .dlib)
-              background_source = 'elib'   + background_library  (pre-built
-                                            chromatogram .elib from any
-                                            source. Third-party GPF is fine)
-              background_source = 'gpf'    + library_sheet + (dlib or
-                                            use_koina + background_fasta),
-                                            build background from GPF
-                                            fractions on the fly. Vendor
-                                            blib must NOT be in the seed.
+            Configure a background:
+              background_source = 'measured'  + background_sheet (a few runs of
+                                               samples like yours) + background_fasta
+                                               (the proteins of your samples)
+              background_source = 'predicted' + background_fasta, best with
+                                               background_peptides
+              background_source = 'library'   + background_library (.elib, .dlib, .blib)
         """.stripIndent().trim()
     }
     def has_vendor_blib = params.blib || params.openswath_blib
-    if (has_vendor_blib && params.library_sheet && bg_source != 'gpf') {
+    if (has_vendor_blib && params.library_sheet) {
         error """
-            Pre-flight: a vendor .blib and --library_sheet were both supplied,
-            but background_source is '${bg_source}'. GPF fractions would then be
-            searched with the VENDOR library as the seed and the resulting
-            chromatogram .elib would become the search library, so any heavy
-            peptidoform not detected in the GPF runs is silently lost.
+            Pre-flight: a .blib and --library_sheet were both supplied. The
+            library_sheet runs would be searched with the .blib, and the chromatogram
+            library they give would replace it: every standard the runs do not show
+            would be lost.
 
-            The GPF data is a BACKGROUND:
-              --blib / --openswath_blib <vendor.blib>   (target)
-              background_source = 'gpf'
-              --library_sheet <fractions.csv>
-              + a proteome-wide seed: --dlib, or --use_koina + --background_fasta
-
-            (Or drop --library_sheet if you did not mean to build from GPF.)
+            To build a background from runs, list them in background_sheet instead:
+              --blib / --openswath_blib <vendor.blib>   (the assay library)
+              background_source: measured
+              background_sheet:  <runs.csv>             (laid out as library_sheet)
+              background_fasta:  <the proteins of your samples>
         """.stripIndent().trim()
     }
-    if (has_vendor_blib && params.elib && bg_source != 'elib') {
+    if (has_vendor_blib && params.elib) {
         error """
-            Pre-flight: a vendor .blib and --elib were both supplied, but
-            background_source is '${bg_source}'. The .elib would be used as the
-            search library and the vendor blib silently discarded, losing its
-            heavy channel and its derived reference_list.
+            Pre-flight: a .blib and --elib were both supplied as the assay library.
+            The .elib would be searched and the .blib dropped, with its heavy channel
+            and the reference list derived from it.
 
-            A pre-built GPF chromatogram library is a BACKGROUND. Use:
-              --blib / --openswath_blib <vendor.blib>   (target)
-              background_source = 'elib'
-              --background_library <chromatogram.elib>
+            To use the .elib as the background:
+              background_source:  library
+              background_library: <chromatogram.elib>
         """.stripIndent().trim()
     }
+    def other_lib = ['dlib', 'use_koina'].findAll { params[it] }
+    if (params.blib && other_lib) {
+        error "Pre-flight: --blib and --${other_lib.join(' and --')} were both supplied as the assay " +
+              "library, and only one would be searched. Supply one. To add peptides to a .blib as a " +
+              "background, use background_source."
+    }
+    if (params.background_fasta && has_vendor_blib && file(params.background_fasta) == file(params.fasta)) {
+        log.warn "background_fasta is --fasta. With a vendor .blib, --fasta usually holds only the " +
+                 "standards, and a background of their peptides gives Context nothing to learn from: " +
+                 "give the proteins of your samples."
+    }
+    if (bg_source != 'none') {
+        def osw_native = params.openswath_pqp || params.openswath_tsv || params.openswath_traml
+        def why = "On EncyclopeDIA a background is added only to a --blib library, and on OpenSWATH " +
+                  "to any library but --openswath_pqp, --openswath_tsv and --openswath_traml. Other " +
+                  "libraries are searched as they are: their entries outside your reference list are " +
+                  "the background."
+        def ignored = (has_enc && !params.blib ? ['EncyclopeDIA'] : []) +
+                      (has_osw && osw_native   ? ['OpenSWATH']    : [])
+        if (!((has_enc && params.blib) || (has_osw && !osw_native))) {
+            error "Pre-flight: background_source is '${bg_source}', but no library here takes a background. ${why}"
+        }
+        if (ignored) {
+            log.warn "background_source '${bg_source}': the ${ignored.join(' and ')} routes do not use it. ${why}"
+        }
+        if (!(has_enc_prm || (has_osw_prm && (params.openswath_prm_fdr ?: 'context') != 'pyprophet'))) {
+            log.warn "background_source '${bg_source}': no route here learns from a background (EncyclopeDIA " +
+                     "PRM, or OpenSWATH PRM with openswath_prm_fdr: context). It only adds to the search " +
+                     "library, where it competes with your peptides."
+        }
+    }
+    if (bg_source == 'none' && (params.heavy_label ?: []) && has_enc_prm && params.blib && !enc_prm_uses_derived) {
+        log.warn "EncyclopeDIA PRM: the library is --blib, with no background. Context learns from the " +
+                 "library's peptides outside your reference list; if the list covers the whole .blib, as a " +
+                 "vendor kit's does, there are none. Set background_source."
+    }
+    if (bg_source == 'none' && (params.heavy_label ?: []) && has_osw_prm && (params.openswath_blib || params.blib) &&
+        (params.openswath_prm_fdr ?: 'context') != 'pyprophet' && !openswath_prm_uses_derived) {
+        log.warn "OpenSWATH PRM: the library is the .blib, with no background. Context-MS learns from the " +
+                 "library's peptides outside your reference list; if the list covers the whole .blib, as a " +
+                 "vendor kit's does, there are none. Set background_source, or " +
+                 "openswath_prm_fdr: pyprophet."
+    }
 
-    if (params.openswath_prm_encyclopedia_quant && has_osw_prm &&
+    def diathem_weights = ['uniform', 'poisson', 'beta_kl', 'beta_is', 'sqrt_model', 'top3', 'top5',
+                           'library_prior', 'nmf2_varexp', 'nmf3_varexp', 'nmf5_varexp', 'nmf5_share',
+                           'gated_nmf5_varexp', 'gated_nmf5_varexp_beta_kl']
+    if (!(params.diathem_weight in diathem_weights)) {
+        error "diathem_weight must be one of ${diathem_weights.join(', ')}, got: '${params.diathem_weight}'"
+    }
+    if (!(params.diathem_max_fragments instanceof Integer) || params.diathem_max_fragments < 0) {
+        error "diathem_max_fragments must be a whole number, 0 for every fragment, got: '${params.diathem_max_fragments}'"
+    }
+    if (!(params.diathem_baseline instanceof Boolean)) {
+        error "diathem_baseline must be true or false, got: '${params.diathem_baseline}'"
+    }
+    if (!(params.diathem_targets_source in ['reference', 'library'])) {
+        error "diathem_targets_source must be 'reference' or 'library', got: " +
+              "'${params.diathem_targets_source}'"
+    }
+    if (params.run_diathem && has_osw_prm && params.diathem_targets_source == 'library' &&
         (params.openswath_pqp || params.openswath_tsv || params.openswath_traml)) {
         error """
-            Pre-flight: openswath_prm_encyclopedia_quant=true needs a library
-            EncyclopeDIA can read. --openswath_pqp / --openswath_tsv /
-            --openswath_traml are OpenSWATH-native formats that it cannot, so
-            there is nothing for CONTEXT_SEARCH to search.
-
-            Every other library source works. Either drop
-            openswath_prm_encyclopedia_quant, or supply the library as one of:
-              --blib / --openswath_blib   vendor kit or Skyline library
-              --dlib                      EncyclopeDIA spectrum library
-              --elib                      EncyclopeDIA chromatogram library
-              --library_sheet             GPF runs, built into a chromatogram library
-              --use_koina                 predicted from --fasta
+            Pre-flight: diathem_targets_source = 'library' quantifies the spectral
+            library the OpenSWATH library is built from. --openswath_pqp,
+            --openswath_tsv and --openswath_traml are used as supplied, with no
+            such library. Use diathem_targets_source = 'reference'.
         """.stripIndent().trim()
     }
 
-    if (bg_source == 'koina' && !params.background_fasta) {
-        error """
-            Pre-flight: background_source='koina' requires --background_fasta.
-            Do NOT reuse --fasta if it is a small vendor construct FASTA.
-            Predicting a 'background' from vendor constructs yields a
-            background composed entirely of vendor targets, which collides
-            with the target library and gives zero real background targets.
-            Supply a proteome-wide FASTA.
-        """.stripIndent().trim()
+    def not_mzml = { r -> !(file(r.file).getName().toLowerCase() ==~ /.*\.(mzml|raw|wiff2?|d|lcd)$/) }
+    if (params.run_diathem && rows.any(not_mzml)) {
+        log.warn "run_diathem: diathem reads mzML only, so it does not quantify " +
+                 rows.findAll(not_mzml).collect { it.sample_id }.join(', ')
     }
-
     def diathemable = { engine, mode -> rows.any { r ->
         (r.engine?.trim() ?: 'encyclopedia').toLowerCase() == engine &&
-        r.mode.toUpperCase() == mode &&
-        (r.file.toLowerCase() ==~ /.*\.(raw|mzml|mzxml)$/)
+        r.mode.toUpperCase() == mode && !not_mzml(r)
     } }
     def diathem_ok_enc_dia = params.run_diathem && diathemable('encyclopedia', 'DIA')
     def diathem_ok_enc_prm = params.run_diathem && diathemable('encyclopedia', 'PRM')
-    def diathem_ok_osw_dia = params.run_diathem && has_osw_dia
-    def diathem_ok_osw_prm = params.run_diathem && has_osw_prm
+    def diathem_ok_osw_dia = params.run_diathem && diathemable('openswath', 'DIA')
+    def diathem_ok_osw_prm = params.run_diathem && diathemable('openswath', 'PRM')
+
+    rows.findAll { sig(it) != ['openswath', 'DIA'] }.groupBy(sig).each { route, rs ->
+        def lists = rs.collect { ref_of(it) }.unique()
+        if (lists.size() > 1) {
+            error """
+                Pre-flight: the ${route[0]} ${route[1]} rows name different reference lists:
+                  ${lists.collect { it ?: '(blank)' }.join('\n                  ')}
+                One list serves every run of an engine and mode. Name the same file on
+                all their rows, or leave it blank on all of them, or run the pipeline
+                once per list.
+            """.stripIndent().trim()
+        }
+    }
+
+    def diathem_on =[ ['encyclopedia', 'DIA']: diathem_ok_enc_dia, ['encyclopedia', 'PRM']: diathem_ok_enc_prm,
+                       ['openswath', 'DIA']: diathem_ok_osw_dia,    ['openswath', 'PRM']: diathem_ok_osw_prm ]
+    rows.findAll { ref_of(it) }.unique { [ref_of(it), sig(it)] }.each { r ->
+        def first  = file(ref_of(r)).withReader { it.readLine() } ?: ''
+        def header = first.split(first.count('\t') >= first.count(',') ? '\t' : ',', -1)
+                          .collect { it.trim().replaceAll('"', '') }
+        def low    = header.collect { it.toLowerCase() }
+        def problem = null
+        if (sig(r) == ['encyclopedia', 'PRM'] &&
+            !(low.size() >= 7 && low[0] == 'compound' && low[3] == 'm/z' && low[4] == 'z')) {
+            problem = "on the EncyclopeDIA PRM route it is read by column position"
+        } else if (diathem_on[sig(r)] && !['Compound', 'm/z', 'z'].every { it in header }) {
+            problem = "diathem reads it by the column names Compound, m/z and z"
+        }
+        if (problem) {
+            error """
+                Pre-flight: reference_list ${ref_of(r)} (sample ${r.sample_id}):
+                ${problem}. Supply it in the isolation-list layout Skyline exports,
+                with a numeric RT and window on every row:
+                  Compound,Formula,Adduct,m/z,z,RT Time (min),Window (min)[,isDecoy]
+                found: ${header.join(',')}
+            """.stripIndent().trim()
+        }
+    }
+
+    def gives_primary = { engine, mode ->
+        switch (params.primary_abundance) {
+            case 'encyclopedia': return engine == 'encyclopedia'
+            case 'openswath':    return engine == 'openswath'
+            case 'tric':         return engine == 'openswath' && mode == 'DIA' && params.run_tric
+            case 'diathem':      return params.run_diathem && diathemable(engine, mode)
+            default:             return false
+        }
+    }
+    def no_primary = routes.findAll { r -> !gives_primary(r[0], r[1]) }
+    if (no_primary) {
+        error """
+            Pre-flight: primary_abundance = '${params.primary_abundance}' gives no
+            abundance for ${no_primary.collect { "${it[0]} ${it[1]}" }.join(', ')}, so the
+            abundance column would be empty. Choose one that runs there:
+              encyclopedia  engine encyclopedia
+              openswath     engine openswath
+              diathem       run_diathem = true, runs given as or converted to mzML
+              tric          engine openswath, mode DIA, run_tric = true
+        """.stripIndent().trim()
+    }
 
     def runs_by_route = rows
         .groupBy { r -> [ (r.engine?.trim() ?: 'encyclopedia').toLowerCase(),
@@ -257,16 +409,6 @@ workflow {
         }
     }
 
-    def sample_map_str = rows.collect { r ->
-        def f = file(r.file)
-        def stem = f.getName().replaceFirst(/\.(raw|mzML|mzml|mzXML|mzxml|dia)$/, '')
-        "${stem}\t${r.sample_id}"
-    }.join('\n') + '\n'
-    def sample_map_file = file("${workDir}/sample_map.tsv")
-    sample_map_file.parent.mkdirs()
-    sample_map_file.text = sample_map_str
-    def sample_map_ch = Channel.value(sample_map_file)
-
     samples = Channel
         .fromPath(params.input)
         .splitCsv(header: true)
@@ -282,6 +424,10 @@ workflow {
             if (engine == 'openswath' && f.getName().toLowerCase().endsWith('.dia')) {
                 error ".dia is encyclopedia-specific; sample '${meta.id}' " +
                       "uses engine=openswath. Provide the .raw or a .mzML instead."
+            }
+            if (engine == 'encyclopedia' && f.getName().toLowerCase().endsWith('.mzxml')) {
+                error "sample '${meta.id}': EncyclopeDIA does not read mzXML. Provide the " +
+                      "vendor file or an .mzML instead."
             }
             tuple(meta, f, rl)
         }
@@ -316,7 +462,9 @@ workflow {
 
     normalized = ext_split.ready.mix(converted)
 
-    by_route = normalized.branch { meta, _f, _ml ->
+    REMOVE_SURVEY_SCANS(normalized)
+
+    by_route = REMOVE_SURVEY_SCANS.out.run.branch { meta, _f, _ml ->
         enc_dia: meta.engine == 'encyclopedia' && meta.mode == 'DIA'
         enc_prm: meta.engine == 'encyclopedia' && meta.mode == 'PRM'
         osw_dia: meta.engine == 'openswath'    && meta.mode == 'DIA'
@@ -345,15 +493,13 @@ workflow {
         def enc_dia_has_reference_list =
                 has_enc_dia && (enc_dia_sample_rl != null || params.blib)
 
-        def need_library_targets = diathem_ok_enc_dia && !enc_dia_has_reference_list
-
         PREPARE_LIBRARY_ENCYCLOPEDIA(fasta, enc_labels, bg_source,
                         params.background_library, params.background_fasta,
-                        params.background_min_targets, need_library_targets, no_file)
+                        params.background_min_targets, no_file)
 
-        def enc_prm_samples
-        def enc_prm_targets
         if (has_enc_prm) {
+            def enc_prm_samples
+            def enc_prm_targets
             if (enc_prm_sample_rl != null) {
                 NORMALIZE_REFERENCE_MODS(Channel.value(enc_prm_sample_rl),
                                          PREPARE_LIBRARY_ENCYCLOPEDIA.out.library)
@@ -386,28 +532,23 @@ workflow {
                       "--blib for automatic " +
                       "derivation from a vendor .blib."
             }
-        } else {
-            enc_prm_samples = by_route.enc_prm
-            enc_prm_targets = no_file
+            ENCYCLOPEDIA_PRM(enc_prm_samples, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
+                         diathem_lib_ch, standard_amts_ch, params.heavy_label,
+                         enc_prm_targets, no_file, diathem_ok_enc_prm)
         }
 
-        def enc_dia_targets = no_file
-        if (enc_dia_has_reference_list) {
-            enc_dia_targets = (enc_dia_sample_rl != null)
-                ? Channel.value(enc_dia_sample_rl)
-                : PREPARE_LIBRARY_ENCYCLOPEDIA.out.reference_list_derived
+        if (has_enc_dia) {
+            def enc_dia_targets = no_file
+            if (enc_dia_has_reference_list) {
+                enc_dia_targets = (enc_dia_sample_rl != null)
+                    ? Channel.value(enc_dia_sample_rl)
+                    : PREPARE_LIBRARY_ENCYCLOPEDIA.out.reference_list_derived
+            }
+            ENCYCLOPEDIA_DIA(by_route.enc_dia, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
+                         diathem_lib_ch, standard_amts_ch, params.heavy_label,
+                         enc_dia_targets, enc_dia_has_reference_list, no_file,
+                         diathem_ok_enc_dia)
         }
-
-        ENCYCLOPEDIA_DIA(by_route.enc_dia, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
-                     diathem_lib_ch, standard_amts_ch, params.heavy_label,
-                     sample_map_ch, enc_dia_targets,
-                     need_library_targets
-                         ? PREPARE_LIBRARY_ENCYCLOPEDIA.out.library_targets
-                         : no_file,
-                     no_file, diathem_ok_enc_dia)
-        ENCYCLOPEDIA_PRM(enc_prm_samples, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
-                     diathem_lib_ch, standard_amts_ch, params.heavy_label,
-                     sample_map_ch, enc_prm_targets, no_file, diathem_ok_enc_prm)
     }
 
     if (has_osw) {
@@ -415,18 +556,6 @@ workflow {
             (it.engine?.trim() ?: 'encyclopedia').toLowerCase() == 'openswath' &&
             it.mode.toUpperCase() == 'PRM' && ref_of(it)
         }.collect { ref_of(it) }.unique() : []
-        if (openswath_prm_refs.size() > 1) {
-            error """
-                main.nf: OSW-PRM samples in the samplesheet reference more than
-                one distinct reference_list file:
-                  ${openswath_prm_refs.join('\n                  ')}
-                The pipeline derives iRT anchors from the reference_list and
-                applies them library-wide. Using one sample's list to calibrate
-                another sample's data would silently cross-calibrate.
-                Split into separate pipeline runs, one per reference_list,
-                or make every OSW-PRM row reference the same file.
-                """.stripIndent().trim()
-        }
         def openswath_reflist_for_anchors = openswath_prm_refs ?
                                           file(openswath_prm_refs[0]) : no_file
 
@@ -464,21 +593,20 @@ workflow {
                                    PREPARE_LIBRARY_OPENSWATH.out.library,
                                    PREPARE_LIBRARY_OPENSWATH.out.irt_library,
                                    PREPARE_LIBRARY_OPENSWATH.out.full_window_flag,
-                                   PREPARE_LIBRARY_OPENSWATH.out.encyclopedia_library,
-                                   fasta,
+                                   PREPARE_LIBRARY_OPENSWATH.out.spectral_library,
                                    diathem_lib_ch, standard_amts_ch,
-                                   params.heavy_label, sample_map_ch,
-                                   openswath_prm_targets, no_file, diathem_ok_osw_prm)
+                                   params.heavy_label,
+                                   openswath_prm_targets, no_file, diathem_ok_osw_prm, fasta)
         }
         if (has_osw_dia) {
             OPENSWATH_DIA(by_route.osw_dia,
                                    PREPARE_LIBRARY_OPENSWATH.out.library,
                                    PREPARE_LIBRARY_OPENSWATH.out.irt_library,
                                    PREPARE_LIBRARY_OPENSWATH.out.full_window_flag,
-                                   fasta,
+                                   PREPARE_LIBRARY_OPENSWATH.out.spectral_library,
                                    diathem_lib_ch, standard_amts_ch,
-                                   params.heavy_label, sample_map_ch,
-                                   no_file, diathem_ok_osw_dia)
+                                   params.heavy_label,
+                                   no_file, diathem_ok_osw_dia, fasta)
         }
     }
 }
