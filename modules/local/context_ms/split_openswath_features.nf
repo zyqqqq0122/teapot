@@ -170,10 +170,11 @@ process SPLIT_OPENSWATH_FEATURES {
             f"HARD ERROR: SPLIT_OPENSWATH_FEATURES produced zero background targets "
             f"for {REF_OUT.split('_reference')[0]}. The reference list appears "
             f"to cover the entire search library, so Context's LDA has nothing "
-            f"to train on. Fix by unioning a background library into the search "
-            f"transitions. For the OSW blib route set background_koina=true "
-            f"(a Koina-predicted proteome library will be unioned with the "
-            f"vendor blib); reference_list is derived from the vendor blib only."
+            f"to train on. Add a background to the library with background_source "
+            f"(PARAMETERS.md, section 4); a library given as --openswath_pqp, "
+            f"--openswath_tsv or --openswath_traml takes none, so it needs entries "
+            f"outside the reference list. Or set openswath_prm_fdr = 'pyprophet', "
+            f"which needs no background."
         )
     PY
 
