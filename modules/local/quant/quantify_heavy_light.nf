@@ -137,16 +137,29 @@ process QUANTIFY_HEAVY_LIGHT {
         rank = pd.to_numeric(base['peak_group_rank'], errors='coerce')
         base = base[rank.isna() | (rank <= 1)]
 
+    pc = ['peptide', 'charge']
+    has_std = pd.MultiIndex.from_frame(base[pc]).isin(
+        pd.MultiIndex.from_frame(base.loc[base['channel'] == 'heavy', pc]))
+    if not has_std.all():
+        print(f"left out {base.loc[~has_std, pc].drop_duplicates().shape[0]} precursor(s) "
+              f"with no heavy row in any run: no standard", file=sys.stderr)
+    base = base[has_std]
+
     key = ['sample_id', 'peptide', 'charge']
 
     def rt_col(method):
         c = f'rt_{method}_seconds'
         return c if c in base.columns and base[c].notna().any() else 'rt_apex_seconds'
 
+    seen = [c for c in ('id_qvalue', 'id_pep', 'rt_apex_seconds', 'rt_encyclopedia_seconds',
+                        'abundance_encyclopedia', 'abundance_openswath', 'abundance_tric')
+            if c in base.columns]
+
     def pair_for_method(method):
         col = f'abundance_{method}'
-        sub = base[[*key, 'channel', 'protein', col, 'consistency', 'id_qvalue']].copy()
-        sub['rt'] = pd.to_numeric(base[rt_col(method)], errors='coerce')
+        rows = base if method == 'diathem' else base[base[seen].notna().any(axis=1)]
+        sub = rows[[*key, 'channel', 'protein', col, 'consistency', 'id_qvalue']].copy()
+        sub['rt'] = pd.to_numeric(rows[rt_col(method)], errors='coerce')
         sub[col] = pd.to_numeric(sub[col], errors='coerce')
         if MIN_CONS > 0.0:
             sub.loc[pd.to_numeric(sub['consistency'], errors='coerce') < MIN_CONS, col] = pd.NA
