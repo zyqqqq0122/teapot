@@ -31,7 +31,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_PRM {
     }
     def _aug = (heavy_label ?: []).collect { r ->
         def d = r.containsKey('delta') ? (r.delta as Double) : _delta_by_acc[r.unimod]
-        [ site: (r.site ?: r.residue), unimod: r.unimod, delta: d ]
+        [ site: r.site, unimod: r.unimod, delta: d ]
     }
     def label_json = groovy.json.JsonOutput.toJson(_aug)
     def mod_tol    = params.mod_mass_tolerance

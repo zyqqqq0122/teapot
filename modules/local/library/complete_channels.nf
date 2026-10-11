@@ -26,7 +26,7 @@ process COMPLETE_CHANNELS {
     }
     def _aug = (heavy_label ?: []).collect { r ->
         def d = r.containsKey('delta') ? (r.delta as Double) : _delta_by_acc[r.unimod]
-        [ site: (r.site ?: r.residue), unimod: (r.unimod ?: ''), delta: d ]
+        [ site: r.site, unimod: (r.unimod ?: ''), delta: d ]
     }
     def label_json = groovy.json.JsonOutput.toJson(_aug)
     def ext        = library.extension
