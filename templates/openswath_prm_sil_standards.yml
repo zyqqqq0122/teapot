@@ -72,7 +72,7 @@ openswath_search_args: >
 openswath_prm_fdr: pyprophet
 
 fdr:               0.01
-primary_abundance: tric
+primary_abundance: openswath
 java_mem:          '32g'
 
 run_diathem:             true

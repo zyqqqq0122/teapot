@@ -588,8 +588,8 @@ calibrated on scheduled PRM.
   both curves, as in diathem's own PRM bench, and the least precise of those
   tried; the `beta_kl` family (inverse fitted intensity, prmherd's KL loss) is
   more precise but less accurate. EncyclopeDIA is more precise than every diathem
-  setting on the SIL QC runs and more accurate near the detection limit, so the SIL
-  and label-free templates keep `primary_abundance: encyclopedia`; diathem is
+  setting on the SIL QC runs and more accurate near the detection limit, so the
+  EncyclopeDIA templates keep `primary_abundance: encyclopedia`; diathem is
   more accurate at moderate fold changes. `poisson`, diathem's default, weights
   the observed intensity, so points that happen to read low weigh more, and is
   the least accurate. The schemes built on diathem's measured noise law

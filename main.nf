@@ -40,8 +40,8 @@ def helpMessage() {
 
     Some settings (all of them in PARAMETERS.md):
       --primary_abundance   whose amounts fill the abundance column, and the SIL
-                            amounts: diathem (the default), encyclopedia, openswath
-                            or tric
+                            amounts: encyclopedia (the default), openswath, tric
+                            or diathem
       --run_diathem         also quantify with diathem: true (the default) or false
       --diathem_library     a library for diathem to take each peptide's expected
                             fragment intensities from, instead of the assay library
