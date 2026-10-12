@@ -15,12 +15,12 @@ process FINALIZE_QUANT {
     val   route
 
     output:
-    path "quant.full.tsv",       emit: full
-    path "quant.confident.tsv",  emit: confident
-    path "quant.reference.tsv",  emit: reference
-    path "quant_summary.tsv",    emit: summary
-    path "finalize_quant.log",   emit: log
-    path "versions.yml",         emit: versions
+    path "quant.full.tsv",                emit: full
+    path "quant.reference.confident.tsv", emit: confident
+    path "quant.reference.tsv",           emit: reference
+    path "quant_summary.tsv",             emit: summary
+    path "finalize_quant.log",            emit: log
+    path "versions.yml",                  emit: versions
 
     script:
     def _rows_uni = file("${projectDir}/assets/unimod_delta_masses.tsv").readLines()
@@ -243,16 +243,16 @@ process FINALIZE_QUANT {
     paired = {p for p, c in targets if c == 'light'} & {p for p, c in targets if c == 'heavy'}
     heavy_only = ({p for p, c in targets if c == 'heavy'} - paired) if (from_list and paired) else set()
     if heavy_only:
-        print("left out of quant.reference.tsv and quant.confident.tsv: %d reference peptide(s) "
+        print("left out of quant.reference.tsv and quant.reference.confident.tsv: %d reference peptide(s) "
               "with no light form in the reference list" % len(heavy_only), file=sys.stderr)
 
     write('quant.full.tsv', out, full_cols)
     shown = [o for o in out if o['is_decoy'] != 'true' and o['_best']
              and o['peptide'] not in heavy_only]
     reference = [o for o in shown if o['in_reference_list'] == 'true']
-    confident = [o for o in shown if o['detected'] == 'true']
+    confident = [o for o in reference if o['detected'] == 'true']
     write('quant.reference.tsv', reference, cols)
-    write('quant.confident.tsv', confident, cols)
+    write('quant.reference.confident.tsv', confident, cols)
 
     RTQ = 'rt_%s_seconds' % PRIMARY
     if not has(RTQ):
@@ -302,14 +302,14 @@ process FINALIZE_QUANT {
         print("pairs_quantified: light and heavy peaks (%s) within %g s; %d detected and "
               "quantified pair(s) further apart not counted" % (RTQ, TOL, n_apart)
               if TOL > 0 else "pairs_quantified: co-elution not checked", file=sys.stderr)
-    print("wrote quant.full.tsv (%d rows), quant.reference.tsv (%d), quant.confident.tsv (%d) "
+    print("wrote quant.full.tsv (%d rows), quant.reference.tsv (%d), quant.reference.confident.tsv (%d) "
           "over %d sample(s)" % (len(out), len(reference), len(confident), len(samples)),
           file=sys.stderr)
     for line in open('quant_summary.tsv'):
         print("  " + line.rstrip(), file=sys.stderr)
     if not confident:
-        print("WARNING: FINALIZE_QUANT [%s]: nothing was detected at q <= %g. The tables "
-              "are still written; check the search." % (ROUTE, FDR), file=sys.stderr)
+        print("WARNING: FINALIZE_QUANT [%s]: no reference peptide was detected at q <= %g. "
+              "The tables are still written; check the search." % (ROUTE, FDR), file=sys.stderr)
     PY
 
     cat <<-EOF > versions.yml
@@ -322,7 +322,7 @@ process FINALIZE_QUANT {
 
     stub:
     """
-    for f in quant.full.tsv quant.confident.tsv quant.reference.tsv quant_summary.tsv; do touch \$f; done
+    for f in quant.full.tsv quant.reference.confident.tsv quant.reference.tsv quant_summary.tsv; do touch \$f; done
     touch finalize_quant.log
     echo '"${task.process}": {python: stub}' > versions.yml
     """
