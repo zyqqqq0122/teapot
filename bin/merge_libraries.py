@@ -23,7 +23,8 @@ PROVENANCE_COLUMN = "provenance"
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--primary", required=True,
-                    help="Primary .dlib (kept in full; wins on collision).")
+                    help="Primary .dlib (kept in full; wins on collision and keeps "
+                         "its peptides' protein links).")
     ap.add_argument("--secondary", required=True,
                     help="Secondary .dlib (colliding entries dropped).")
     ap.add_argument("--out", required=True, help="Output .dlib path.")
@@ -88,13 +89,19 @@ def main():
         n_secondary_added += 1
 
     existing_ptp = set()
+    primary_linked = set()
     for row in cur.execute(
             "SELECT PeptideSeq, isDecoy, ProteinAccession FROM peptidetoprotein"):
         existing_ptp.add(row)
+        primary_linked.add(row[0])
     n_ptp_added = 0
+    n_ptp_primary = 0
     for row in src_cur.execute(
             "SELECT PeptideSeq, isDecoy, ProteinAccession FROM peptidetoprotein"):
         if row in existing_ptp:
+            continue
+        if row[0] in primary_linked:
+            n_ptp_primary += 1
             continue
         cur.execute(
             "INSERT INTO peptidetoprotein (PeptideSeq, isDecoy, ProteinAccession) "
@@ -121,6 +128,8 @@ def main():
     print(f"secondary dropped collision: {n_secondary_dropped_collision}",
           file=sys.stderr)
     print(f"peptidetoprotein rows added: {n_ptp_added}", file=sys.stderr)
+    print(f"peptidetoprotein rows not added: {n_ptp_primary} (peptides the primary "
+          f"links to a protein)", file=sys.stderr)
     print(f"union entries total:         {n_total}", file=sys.stderr)
     print(f"union peptidetoprotein rows: {n_prot}", file=sys.stderr)
 
