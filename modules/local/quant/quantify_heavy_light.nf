@@ -227,8 +227,8 @@ process QUANTIFY_HEAVY_LIGHT {
     pairs['ratio_L_H'] = light / heavy
     pairs['ratio_H_L'] = heavy / light
     pairs['abs_pmol_light'] = pairs['ratio_L_H'] * pd.to_numeric(pairs['heavy_pmol_known'], errors='coerce')
-    pairs['both_detected'] = (pairs[['light_q_value', 'heavy_q_value']].max(axis=1) <= FDR) & \\
-                             pairs['light_q_value'].notna() & pairs['heavy_q_value'].notna()
+    pairs['light_detected'] = pairs['light_q_value'] <= FDR
+    pairs['heavy_detected'] = pairs['heavy_q_value'] <= FDR
 
     def status(r):
         l, h = pd.notna(light[r.name]), pd.notna(heavy[r.name])
@@ -236,6 +236,10 @@ process QUANTIFY_HEAVY_LIGHT {
         if h: return 'light_missing'
         return 'heavy_missing' if l else 'both_missing'
     pairs['status'] = pairs.apply(status, axis=1)
+    both_detected = pairs['light_detected'] & pairs['heavy_detected']
+    apart = pairs['co_eluting'].eq(False).fillna(False).astype(bool)
+    pairs['confident'] = (pairs['method'] == PRIMARY) & (pairs['status'] == 'both_quantified') & \\
+                         both_detected & ~apart
 
     n_abs = int(pairs['abs_pmol_light'].notna().sum())
     if n_abs == 0:
@@ -264,10 +268,10 @@ process QUANTIFY_HEAVY_LIGHT {
             "Refusing to emit an all-blank absolute-quant table silently."
         )
 
-    cols = ['sample_id', 'method', 'protein', 'peptide', 'charge', 'status',
+    cols = ['sample_id', 'method', 'protein', 'peptide', 'charge', 'status', 'confident',
             'light_abundance', 'heavy_abundance', 'ratio_L_H', 'ratio_H_L',
             'heavy_pmol_known', 'abs_pmol_light',
-            'light_q_value', 'heavy_q_value', 'both_detected',
+            'light_q_value', 'heavy_q_value', 'light_detected', 'heavy_detected',
             'light_rt_seconds', 'heavy_rt_seconds', 'co_eluting',
             'light_consistency', 'heavy_consistency']
     if 'diathem' not in methods:
@@ -275,10 +279,8 @@ process QUANTIFY_HEAVY_LIGHT {
     pairs = pairs[cols].sort_values(['method', 'sample_id', 'protein', 'peptide', 'charge'])
     pairs.to_csv("peptide.abs_quant.tsv", sep='\\t', index=False)
 
-    detected = pairs['both_detected'] & (pairs['status'] == 'both_quantified')
-    apart = pairs['co_eluting'].eq(False).fillna(False).astype(bool)
-    conf = pairs[(pairs['method'] == PRIMARY) & detected & ~apart] \\
-        .drop(columns=['method', 'status', 'both_detected', 'co_eluting'])
+    conf = pairs[pairs['confident']].drop(columns=['method', 'status', 'confident', 'light_detected',
+                                                   'heavy_detected', 'co_eluting'])
     conf.to_csv("peptide.abs_quant.confident.tsv", sep='\\t', index=False)
 
     amounts = conf.dropna(subset=['abs_pmol_light'])
@@ -297,7 +299,7 @@ process QUANTIFY_HEAVY_LIGHT {
     print(f"light/heavy pairs per tool (q <= {FDR} on both channels = detected):", file=sys.stderr)
     for m, g in pairs.groupby('method'):
         q = g[g['status'] == 'both_quantified']
-        d = q[q['both_detected']]
+        d = q[q['light_detected'] & q['heavy_detected']]
         mark = '  <- primary_abundance: confident table, matrix, protein amounts' if m == PRIMARY else ''
         print(f"  {m:14} {q['peptide'].nunique():4} peptides with both channels quantified, "
               f"{d['peptide'].nunique():4} with both detected{mark}", file=sys.stderr)
