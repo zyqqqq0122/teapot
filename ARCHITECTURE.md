@@ -11,11 +11,12 @@ main.nf                 samplesheet parsing, pre-flight checks, routing. Runs no
 nextflow.config         every parameter and its default; profiles
 conf/base.config        resource defaults, always included
 conf/slurm.config       site overrides, added with -c
-subworkflows/local/     7: four routes, PREPARE_LIBRARY_ENCYCLOPEDIA/_OPENSWATH, PREPARE_BACKGROUND
-modules/local/<domain>/ 47 processes, one per file
+subworkflows/local/     8: four routes, PREPARE_LIBRARY_ENCYCLOPEDIA/_OPENSWATH, PREPARE_BACKGROUND,
+                        PREPARE_CHROMATOGRAM_LIBRARY
+modules/local/<domain>/ 50 processes, one per file
 bin/                    Python called by modules, on PATH inside every task
 lib/                    Groovy helpers, loaded automatically by Nextflow
-assets/                 patch for contextbook, read from projectDir
+assets/                 sentinels, the decoy jar and its source, Wine's CPU list for MSCONVERT
 templates/              params, samplesheet and launcher templates
 figs/                   figures
 *.md                    docs
@@ -32,11 +33,16 @@ figs/                   figures
 | openswath | PRM | `OPENSWATH_PRM` | `osw_prm` |
 
 Before routing, vendor files (`.raw`, `.wiff`, `.wiff2`, `.d`, `.lcd`) go through
-`MSCONVERT`; `.mzML`/`.mzXML` pass through, and `.dia` is accepted on
-EncyclopeDIA routes only. Library preparation runs once per engine:
+`MSCONVERT`; `.mzML`/`.mzXML` pass through (`.mzXML` on OpenSWATH routes only:
+EncyclopeDIA reads `.dia`, mzML and MGF), and `.dia` is accepted on
+EncyclopeDIA routes only. Every run then goes through `REMOVE_SURVEY_SCANS` (§7).
+Library preparation runs once per engine:
 `PREPARE_LIBRARY_ENCYCLOPEDIA` for the EncyclopeDIA routes,
 `PREPARE_LIBRARY_OPENSWATH` for the OpenSWATH routes. Both call
-`PREPARE_BACKGROUND` when `background_source` is not `none`.
+`PREPARE_BACKGROUND` when `background_source` is not `none`. The runs listed in
+`library_sheet` or `background_sheet` become a chromatogram library in
+`PREPARE_CHROMATOGRAM_LIBRARY`: vendor files converted, the files of a condition
+merged, each condition searched, all exported together.
 
 Every route ends the same way: `MERGE_QUANT_<ENGINE>_<MODE>` builds one long
 table, `FINALIZE_QUANT` writes the reporting tables, and `QUANTIFY_HEAVY_LIGHT`
@@ -64,7 +70,7 @@ Tool wrappers keep upstream's spelling (`OPENSWATH_WORKFLOW` after
 `OpenSwathWorkflow`) so the name can be searched in the tool's own documentation.
 
 Otherwise: `snake_case` and no abbreviations (`openswath`, not `osw`), except in
-route labels, output paths and the alias `OSWPRM_CONTEXT_SEARCH`. Tool-specific
+route labels and output paths. Tool-specific
 params are prefixed with the tool. Subworkflows are `<engine>_<mode>` or
 `prepare_<thing>[_<engine>]`; templates are `<engine>_<acquisition>[_<variant>]`.
 Most processes publish to `<outdir>/<process name in lowercase>`, some override it.
@@ -79,9 +85,7 @@ Two programs with similar names.
 
 * **Context** is Java inside our EncyclopeDIA fork (`contextbook`), run as
   `edu.washington.gs.maccoss.encyclopedia.context.ContextMProphetExecutor` by
-  `CONTEXT_SEARCH`. It searches and scores. It is the EncyclopeDIA PRM route, and
-  it also runs on OpenSWATH PRM as `OSWPRM_CONTEXT_SEARCH` when
-  `openswath_prm_encyclopedia_quant` is set.
+  `CONTEXT_SEARCH`. It searches and scores. It is the EncyclopeDIA PRM route.
 * **Context-MS** is a Python package in its own image, run as
   `python3 -m context run` by `CONTEXT_MS_RUN`. It does not search: it rescores
   features OpenSwathWorkflow already extracted. It is the default confidence
@@ -99,24 +103,30 @@ are `params.encyclopedia_container` and `params.context_container`.
 EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator`,
 `IsolationWindowReader.parseMassList`,
 `ContextFeatureScorer.findMatchingMassListWindow`, and
-`assets/masslist-decoys.jar`. `main.nf` errors on `mass_list` in the samplesheet.
-Write `reference_list` in anything new.
+`assets/masslist-decoys.jar`. Write `reference_list` in anything new.
 
 ## 3. Modules
+
+### `msconvert/`, `runs/`
+
+| module | does |
+|---|---|
+| `msconvert` | vendor files to mzML (§4): the samplesheet's in `main.nf`, a sheet's in `PREPARE_CHROMATOGRAM_LIBRARY`. A `.wiff` converts to `<name>-<sample>.mzML`, one file per sample it holds, so every `.mzML` written is taken |
+| `remove_survey_scans` | every samplesheet run, on every route: lists its isolation windows and removes the scans of survey windows (§7) |
 
 ### `encyclopedia/`
 
 | module | does |
 |---|---|
 | `search_dia` | EncyclopeDIA search. Outputs are named after the full input file name, because EncyclopeDIA appends suffixes |
-| `search_gpf`, `merge_gpf` | search gas-phase fractionation (GPF) runs; merge several fractions into one `.dia` |
+| `search_gpf`, `merge_gpf` | search the runs a sheet lists (`library_sheet`, `background_sheet`) with `sheet_search_args`: `java -jar` falls through `Main` to the same `Encyclopedia` search as `search_dia`. Named after gas-phase fractionation (GPF) runs; merge the files of one condition into one `.dia` |
 | `context_search` | Context: rescores the reference peptides with a model trained on the background |
 | `encyclopedia_libexport` | one `-libexport` call: builds a chromatogram library, or the cross-run quant `analysis.elib` |
 | `encyclopedia_libexport_per_sample` | a per-sample `.elib` on the PRM route, which the pooled libexport needs for alignment |
 | `koina_predict` | FASTA to predicted `.dlib` through Koina |
 | `blib_to_dlib` | `.blib` to `.dlib` |
 | `blib_to_reference_list` | `.blib` to a reference list (`Compound`, `m/z`, `z`, RT columns) |
-| `dlib_to_reference_list` | `.dlib`/`.elib` to the same shape, for diathem. Included twice, the second as `ELIB_TO_REFERENCE_LIST` |
+| `dlib_to_reference_list` | `.dlib` to the same shape: diathem's targets on OpenSWATH PRM with `diathem_targets_source: library` |
 | `dlib_to_openswath_tsv` | `.dlib` to an OpenSWATH transition TSV, mapping delta masses to UniMod |
 | `add_decoys_to_reference_list` | adds reversed decoys to a reference list, using `assets/masslist-decoys.jar` |
 
@@ -128,51 +138,55 @@ Write `reference_list` in anything new.
 | `emit_irt_library` | extracts iRT anchors (and an OpenSWATH iRT TSV) from the original `.blib`, not the channel-completed one |
 | `derive_irt_from_reference_list` | iRT anchors from the reference list's RT column (OpenSWATH routes, non-`.blib` sources) |
 | `harmonize_rt` | regresses a library's RT onto the anchor scale; can emit a full-window flag when `rt_harmonize_fallback: full_window` |
-| `merge_libraries` | unions the reference and background libraries (SQLite) |
+| `merge_libraries` | unions the reference and background libraries (SQLite). A background exported from several runs holds one entry per peptide and run; only the best-scoring one is kept (lower `Score` is better, as in EncyclopeDIA). A peptide the reference library links to a protein keeps only those links; the background's links are added for the other peptides |
 | `assert_rt_coherent` | stops if the two halves of a merged library are not on one RT scale |
 | `assert_background_adequate` | stops if the background has fewer than `background_min_targets` peptides |
 | `strip_reference_decoys` | decoy-free copy of the reference list, for diathem |
+| `restrict_background` | with `background_peptides`: keeps, of a predicted background, the peptides among the `background_peptides_top` a PeptideAtlas build observes most often, or those of a list |
 | `normalize_reference_mods` | rewrites a supplied reference list to the library's modification notation (EncyclopeDIA PRM route), see below |
 
 ### `openms/`, `context_ms/`, `pyprophet/`, `tric/`
 
 | module | does |
 |---|---|
-| `assert_openswath_feasible` | measures spectral occupancy before the OpenSWATH PRM search and detects nested survey windows (§7) |
+| `assert_openswath_feasible` | measures spectral occupancy before the OpenSWATH PRM search (§7) |
 | `openswath_assay_generator` | selects transitions; first stops on duplicated `transition_name` values |
 | `openswath_decoy_generator` | appends decoys and writes `library.pqp`; stops on an empty library |
-| `openswath_workflow` | the OpenSWATH search |
-| `extract_openswath_intensity` | peak areas from the `.osw` |
-| `split_openswath_features`, `context_ms_run` | split features into reference and background, then rescore with Context-MS |
+| `openswath_workflow` | the OpenSWATH search. On a run without MS1 scans it turns MS1 scoring off, which otherwise crashes OpenSwathWorkflow |
+| `extract_openswath_intensity` | peak areas from the `.osw`: per precursor, of the feature the FDR step identified (its `SpecId` is `f<feature id>_...`), else of the largest peak. It runs after the FDR step for that reason; OpenSWATH reports several candidate peaks per precursor |
+| `split_openswath_features`, `context_ms_run` | split features into reference and background, ordered by precursor and retention time (OpenSWATH's feature ids are random), then rescore with Context-MS |
 | `pyprophet_score_single`, `pyprophet_to_psm` | the pyprophet alternative on OpenSWATH PRM: one model per run, reshaped to Context-MS's output columns |
 | `pyprophet_subsample`, `_merge`, `_learn`, `_apply`, `_export` | OpenSWATH DIA: one model learned over all runs, applied to each |
-| `assert_search_productive` | stops if the FDR step identified nothing (PRM routes) |
+| `assert_search_productive` | per run, reports how many reference peptides the FDR step identified; stops when every $q$ value is 1 (no decoys). The PRM subworkflows stop when no run identified anything, so one empty run (a blank, a failed injection) does not end a cohort |
 | `tric_feature_alignment` | cross-run alignment, OpenSWATH DIA only, when `run_tric` |
 
 ### `diathem/`, `quant/`
 
 | module | does |
 |---|---|
-| `diathem_quant` | interference-corrected quantification over all runs of a route |
+| `diathem_quant` | interference-corrected quantification over all runs of a route; measures the precursor tolerance that selects each target's own window (§7) |
+| `select_diathem_targets` | diathem's targets on a DIA route without a reference list: the precursors identified at $q \le$ `fdr` in at least one run, and the prior library cut to them |
 | `augment_context_features` | adds diathem's statistics to Context-MS features (`augment_context_with_diathem`, OpenSWATH PRM) |
 | `merge_quant_<engine>_<mode>` | joins identifications and every tool's abundance into one long table |
 | `assert_quant_productive` | stops if the quantification `analysis.elib` matched no fragment ions (EncyclopeDIA routes) |
-| `finalize_quant` | `quant.full/.confident/.reference.tsv` and `quant_summary.tsv` |
+| `finalize_quant` | `quant.full.tsv`, `quant.reference.tsv`, `quant.reference.confident.tsv` and `quant_summary.tsv` |
 | `quantify_heavy_light` | light/heavy pairs and absolute pmol |
 
 ### `bin/` and `lib/`
 
 `bin/` holds the longer Python bodies: `harmonize_rt.py`, `complete_channels.py`,
 `merge_libraries.py`, `assert_rt_coherent.py`, `emit_irt_library.py`,
-`derive_irt_from_reference_list.py`, `assert_openswath_feasible.py`. Shorter
-modules inline their Python in a heredoc.
+`derive_irt_from_reference_list.py`, `assert_openswath_feasible.py`,
+`normalize_reference_mods.py`, `select_diathem_targets.py`, `remove_survey_scans.py`,
+`restrict_background.py`, `diathem_quant.py` (the precursor tolerance `DIATHEM_QUANT`
+passes diathem, §7). Shorter modules inline their Python in a heredoc.
 
 `lib/` is required at start-up:
 
 * `Args.groovy`: `flat()` collapses multi-line param strings; `inherit()` copies
   the search flags in `INHERITED_FLAGS` (`-ftol`, `-ptol`, `-frag`, `-fixed`,
   `-enzyme` and their unit/offset flags) into the libexport calls, so quantification
-  uses the same tolerances as the search.
+  uses the same tolerances as the search. `-instrument` is not among them (§12).
 * `Fingerprint.groovy`: hashes a file or directory (the EncyclopeDIA jar) into the
   task script, so a rebuilt jar invalidates `-resume` caching.
 
@@ -190,8 +204,8 @@ decoys to estimate a reference-side FDR.
   a decoy feature is the reversed library entry (§9), so a reference decoy counts
   only if the list holds exactly that reversed string, as the generated decoys do.
   The processed list is what `CONTEXT_SEARCH` receives in every sample row, and
-  also what diathem (decoys stripped) and `FINALIZE_QUANT` read. A supplied list
-  is the one named in the first EncyclopeDIA PRM row, and every such row gets it.
+  also what diathem (decoys stripped) and `FINALIZE_QUANT` read. Every EncyclopeDIA
+  PRM row names the same supplied list (§6), and every such row gets it.
   Until 2026-10 a supplied list reached `CONTEXT_SEARCH` as the samplesheet file,
   without the generated decoys, so the reference side had no decoys, the null
   Gaussian was degenerate, and a reference q value was 0 exactly when the LDA
@@ -208,21 +222,11 @@ decoys to estimate a reference-side FDR.
   built from the same `.blib` as the library. In a supplied list that already has
   decoys, decoy rows match no library entry and keep their notation, even when
   their target is rewritten.
-* EncyclopeDIA, not fixed here (in `contextbook`): `ContextFeatureScorer` splits
-  the features twice. The second loop compares the feature sequence with its
-  flanking residues, never matches, and appends every feature to the background
-  again, so the background file holds each background feature twice and every
-  reference feature (target and decoy) once. The LDA is trained on that file, so
-  it also sees the reference features it then scores. `context` keeps only the
-  first loop.
 * OpenSWATH: decoys come from the `.pqp`. `SPLIT_OPENSWATH_FEATURES` reads
   `P.DECOY` from the `.osw` and pairs a decoy to its target through
   `DECOY_<target TRAML_ID>`. It uses the reference list only as a set of sequences.
   `main.nf` adds no decoys to an OpenSWATH PRM list, because the same file feeds
-  iRT anchor derivation. `OSWPRM_CONTEXT_SEARCH`
-  (`openswath_prm_encyclopedia_quant`) therefore runs Context on a list without
-  decoys unless the user supplied them. Its q values feed only
-  `OPENSWATH_PRM_LIBEXPORT`, that is `abundance_encyclopedia`.
+  iRT anchor derivation.
 
 **User decoys in an OpenSWATH library are replaced.** Every OpenSWATH source except
 `--openswath_pqp` goes through `OPENSWATH_ASSAY_GENERATOR` then
@@ -236,43 +240,93 @@ and peptide-level tables; the mergers read the peptide level. The PSM table woul
 admit a peptide when any one spectrum match passed, with no error rate at that
 level, and would give one row per match.
 
+**The background has inputs of its own, each with one meaning.** `background_source`
+names how the background library is obtained (`library`, `predicted`, `measured`).
+`background_library` is a background the user has; `background_fasta` the proteins
+potentially in the samples, wherever a FASTA is needed; `background_peptides` the
+predicted peptides to keep; `background_sheet` the runs a measured background is built
+from; `background_search_library` the library those runs are searched with instead of
+a prediction of `background_fasta`. `main.nf` stops on an input the source does not
+use, rather than ignoring it, and says which input was meant when
+`background_library` comes with `measured` or `background_search_library` with
+`library`. `library_sheet`, `--dlib` and `--use_koina` always describe the assay
+library, never the background. Every step of `PREPARE_BACKGROUND` that needs a
+FASTA gets `background_fasta` rather than `--fasta`, which on SIL runs holds only the
+standards: `BlibFile` drops the entries of a `.blib` that no FASTA entry holds.
+`measured` searches the runs through `PREPARE_CHROMATOGRAM_LIBRARY`, the same path a
+`library_sheet` takes, always with `background_fasta` as `-f` (§12, "A background
+needs its own FASTA"). `background_peptides` is either a PeptideAtlas build, ranked by
+`n_adjusted_observations`, or a plain list (one peptide per line, or a FASTA of
+peptides). A list restricts the prediction rather than replacing `background_fasta`:
+`-fastaToKoinaLibrary` digests every FASTA entry, so a FASTA of peptides predicts
+their pieces in place of some of them.
+
 #### diathem is under ongoing development
 
 diathem is currently integrated into TEAPOT in its present state, but remains
 under active development and subject to future updates.
 
-**diathem's target list.** `diathem quant --targets` reads a `.pqp` or a delimited
-list with `Compound`, `m/z`, `z`. OpenSWATH routes pass their `.pqp`. EncyclopeDIA
-PRM always has a reference list. EncyclopeDIA DIA without a reference list or `.blib`
-gets one from `DLIB_TO_REFERENCE_LIST` / `ELIB_TO_REFERENCE_LIST`. The `.elib`
-variant writes RT as minutes; the `.dlib` variant leaves RT empty, because a
-predicted library's `RTInSeconds` may be iRT. diathem skips the RT filter for
-targets without RT, and the DIA branch uses `--rt-window 0` (whole run). This
-derived list feeds diathem only; `FINALIZE_QUANT` still gets the real reference
-list or `NO_FILE`, otherwise `quant.reference.tsv` would cover the whole library.
+**diathem's targets.** `diathem quant --targets` reads a delimited list by the
+column names `Compound`, `m/z`, `z` (and `RT Time (min)` when present), or a `.pqp`.
+It parses modifications only as `[+delta]`: an OpenSWATH `(UniMod:N)` sequence does
+not parse and is skipped. It ignores decoy flags and quantifies every row, decoys
+included, so it is only ever given targets:
 
-`STRIP_REFERENCE_DECOYS` gives diathem a decoy-free list on EncyclopeDIA PRM,
-EncyclopeDIA DIA, and OpenSWATH PRM (`diathem_targets_source: reference`). diathem
-has no decoy model, and its list reader ignores a decoy column. The `.pqp` reader
-filters `DECOY = 0` itself, so OpenSWATH DIA needs no stripping. The library given
-to diathem keeps its decoys: it is only a fragment-ratio prior looked up by
-sequence and charge.
+| route | diathem's targets |
+|---|---|
+| any route with a reference list | the reference list, through `STRIP_REFERENCE_DECOYS` |
+| EncyclopeDIA DIA without one | `SELECT_DIATHEM_TARGETS` on the per-run `.encyclopedia.txt` |
+| OpenSWATH DIA | `SELECT_DIATHEM_TARGETS` on the per-run pyprophet export, `(UniMod:N)` rewritten as `[+delta]` from `assets/unimod_delta_masses.tsv` |
+| OpenSWATH PRM, `diathem_targets_source: library` | `DLIB_TO_REFERENCE_LIST` on the spectral library |
+
+`SELECT_DIATHEM_TARGETS` keeps the precursors at $q \le$ `fdr` in at least one run
+(the same `<=` as `detected` downstream), with the median RT of the runs that
+identified them. Given the whole library, diathem's DIA runtime grew with the
+library rather than with what the runs contain. Because these targets carry a
+measured RT, the route passes `DIATHEM_QUANT` a window around it (`--rt-window`, s
+either side): diathem holds every target's chromatograms in memory, and over the
+whole run a proteome-scale target list exceeded the task's memory; diathem's apex can
+also land on another peak far from where the target was identified. The width comes
+from the runs. A target identified in one run only is centred on that run, so the
+window must hold the whole spread of a precursor's RT across runs:
+`SELECT_DIATHEM_TARGETS` takes its 99.9th percentile over the precursors identified
+in two or more runs, adds 30 s for the peak and keeps at least 60 s (diathem's own
+default). It first leaves out, as misidentifications, identifications whose shift
+from their precursor's median RT lies more than 10 robust SDs (1.4826 MAD) from their
+run's median shift; on runs searched with the same library at 1 % FDR such an
+identification can sit anywhere in the gradient, and one of them sets a precursor's
+spread. One run gives 60 s, and fewer than 20 precursors in two or more runs give
+180 s. The value reaches `DIATHEM_QUANT` through `rt_window.txt`; the log says how it
+was found. Every route with a reference
+list reads the whole run (`--rt-window 0`): the list's RT may be on another scale, and
+on scheduled PRM each target's own window already limits it to its scheduled time
+(§7). `diathem_rt_window` overrides both.
+
+**diathem's prior.** `--library` gives diathem expected fragment ratios. It reads an
+`.elib`, `.dlib` or `.blib`, not a `.pqp`, and keys entries by bare sequence and
+charge, so a heavy standard and its light twin share one entry. The EncyclopeDIA
+routes pass their search library. The OpenSWATH routes pass the spectral library
+their `.pqp` was built from (`PREPARE_LIBRARY_OPENSWATH.out.spectral_library`), and
+nothing for an OpenSWATH-native source, where diathem runs without a prior.
+`diathem_library` overrides both. `SELECT_DIATHEM_TARGETS` cuts an EncyclopeDIA-format
+prior to the targets' entries, in their original order, so the lookup is unchanged
+and diathem does not load the whole library.
+
+**Testing diathem changes.** `diathem_src` puts a diathem source tree first on
+`PYTHONPATH` inside `DIATHEM_QUANT`, so a patched diathem runs without a new image.
+The directory must be visible in the container: bind it with `apptainer.runOptions`
+in a `-c` config.
 
 **Which runs reach diathem.** diathem reads `*.mzML` only (pyteomics), and needs
 every MS2 spectrum to carry an isolation-window target m/z and a scan start time,
-one spectrum per time point. On the EncyclopeDIA routes `main.nf` enables
-`DIATHEM_QUANT` when a row of the route names a `.raw`, `.mzML` or `.mzXML` file
-(`diathemable`); on the OpenSWATH routes it is enabled whenever `run_diathem` is
-set. `DIATHEM_QUANT` then links `mzml_in/<stem>.mzML` to `mzml_dir/<sample_id>.mzML`
-using the `sample_map` stems, because the mergers take diathem's `run_id` as
-`sample_id`.
-
-**Gap to fix next:** that link only works when the mzML is named
-`<samplesheet file stem>.mzML`. `MSCONVERT` does not always write that name (a
-`.wiff` gave `<name>-001.mzML`), and the stem of an `.mzXML` row points at a file
-that is not mzML. In those cases nothing is linked and `diathem quant` exits with
-an error. The fix belongs in the channels, where `meta.id` is known, not in name
-matching inside the module.
+one spectrum per time point. `main.nf` enables `DIATHEM_QUANT` on a route when one
+of its rows is an `.mzML`, or a vendor file `MSCONVERT` turns into one, and warns
+about the rows diathem cannot read (`.dia`, `.mzXML`). Each route builds its own
+`sample_map` (`<file stem>`, tab, `<sample_id>`) from the files it receives, after
+conversion, so a converted name such as `<name>-001.mzML` still maps to its sample.
+`DIATHEM_QUANT` links `mzml_in/<stem>.mzML` to `mzml_dir/<sample_id>.mzML`, because
+the mergers take diathem's `run_id` as `sample_id`, and stops if a staged mzML
+matches no sample.
 
 ## 4. Containers
 
@@ -283,19 +337,29 @@ config uses `withLabel`.
 
 | image | param | pinned by | modules |
 |---|---|---|---|
-| EncyclopeDIA fork | `encyclopedia_container` | version tag `6.8.29-teapot` | the default: `search_dia`, `search_gpf`, `merge_gpf`, `context_search`, both libexports, `koina_predict`, `blib_to_dlib`, `add_decoys_to_reference_list` |
+| EncyclopeDIA fork | `encyclopedia_container` | digest (`6.10.9-teapot`) | the default: `search_dia`, `search_gpf`, `merge_gpf`, `context_search`, both libexports, `koina_predict`, `blib_to_dlib`, `add_decoys_to_reference_list` |
 | OpenMS | `openswath_container` | digest | `openswath_workflow`, `_assay_generator`, `_decoy_generator` |
 | PyProphet | `pyprophet_container` | digest | the six `pyprophet_*` tool modules |
 | Context-MS | `context_container` | tag `main` | `context_ms_run` |
-| diathem | `diathem_container` | digest (image of diathem `main`) | `diathem_quant` |
+| diathem | `diathem_container` | digest (image of diathem's `teapot` branch) | `diathem_quant` |
 | msproteomicstools | none, hardcoded | tag `latest` | `tric_feature_alignment` |
-| ProteoWizard | `msconvert_container` | none | `msconvert` |
-| pandas | `python_container` | tag `2.2.1` | the other 25: all of `library/` and `quant/`, every other `assert_*`, and the Python conversions |
+| ProteoWizard | `msconvert_container` | digest | `msconvert` |
+| pandas | `python_container` | tag `2.2.1` | the other 28: all of `library/` and `quant/`, every other `assert_*`, `remove_survey_scans`, `select_diathem_targets`, and the Python conversions |
 
 OpenMS and PyProphet were pinned by digest after `latest` changed their CLIs
-mid-development, and diathem is pinned to the digest of the image built from its
-`main`; update the digest deliberately when diathem changes. Images still on
-moving tags can change under you.
+mid-development. EncyclopeDIA and diathem are pinned to the digests of the images
+built from the `teapot` branches of `contextbook` and diathem, whose CI moves the
+`teapot` tag (and contextbook's version tag) on every push; update the digests
+deliberately when either changes. ProteoWizard is pinned
+because `MSCONVERT` depends on its Wine build and its `mywine` wrapper (below).
+Images still on moving tags can change under you.
+
+Images are pulled by the Nextflow head job. A pull unpacks the layers in
+`APPTAINER_TMPDIR` and caches them in `APPTAINER_CACHEDIR`, both read from the head
+job's environment, not from `nextflow.config` (its `env` scope reaches tasks only), so
+the launchers in `templates/` export both. Converting the layers to a SIF runs
+`mksquashfs` inside the head job, which therefore needs memory for the largest image,
+the ProteoWizard one.
 
 The Python image must contain pandas and `ps`: the Nextflow task wrapper exits
 without `ps`, and installing pandas at task time needs network and a writable
@@ -305,7 +369,16 @@ Tool quirks:
 
 * **Context-MS** has no `context` executable on PATH; use `python3 -m context run`.
 * **msconvert** is Windows software under Wine (`mywine msconvert`). It needs a
-  writable Wine prefix, bound from `/dev/shm` by `containerOptions`.
+  writable Wine prefix: `containerOptions` binds an empty `/dev/shm` directory to
+  `/mywineprefix`, which `mywine` seeds from the image's `/wineprefix64`, and the
+  task empties it on exit. It also needs Wine to see at most 64 CPUs: Wine copies the
+  online CPU count (`sysconf`, from `/sys/devices/system/cpu/online`) into the
+  one-byte `NumberOfProcessors` of `SYSTEM_BASIC_INFORMATION`, so on a node with 256
+  CPUs .NET reads 0 processors, divides by it while sizing its GC, and msconvert exits
+  255 without output. `containerOptions` binds `assets/wine_cpus_online` (`0-63`)
+  over that file. This is why `MSCONVERT` failed on compute nodes and worked on the
+  login node, which has fewer CPUs. The binds are apptainer syntax; `MSCONVERT` is
+  not set up for the docker profile.
 * **Koina** is an HTTPS API, nothing installed. The fork adds a missing trailing
   `/` to `koina_url`. Model names use underscores (`Prosit_2020_HCD`).
 * **EncyclopeDIA image**: CI in `contextbook` builds and pushes it on every push to
@@ -343,80 +416,284 @@ OOM-killed with 16 GB. Put defaults in the generic scope instead.
 
 `main.nf` stops before scheduling anything on:
 
-* missing `assets/` files (`NO_FILE`, `unimod_delta_masses.tsv`, `masslist-decoys.jar`)
+* missing `assets/` files (`NO_FILE`, `unimod_delta_masses.tsv`, `masslist-decoys.jar`,
+  `wine_cpus_online`)
 * unfilled `<...>` template placeholders in any param. The check recurses into
   lists and maps: `complete_channels_skip_proteins: ['<iRT_Tag>']` once passed a
   scalar-only check and matched nothing
-* old `channel_complete_*` param names, which Nextflow would otherwise ignore
-  silently
-* the removed `mass_list` samplesheet column
-* an unknown `engine`, a `.dia` file on the OpenSWATH engine, or an invalid
-  `background_source`
+* an unknown `engine`, a `.dia` file on the OpenSWATH engine, an `.mzXML` on the
+  EncyclopeDIA engine, or an invalid `background_source`
 * PRM rows that would derive their reference list from a `.blib` with
   `background_source: none` (on OpenSWATH PRM only when `openswath_prm_fdr` is not
   `pyprophet`): the reference set would equal the library, leaving nothing to
   train on
-* a `.blib` together with `--library_sheet` (unless `background_source: gpf`) or
-  `--elib` (unless `background_source: elib`), where the `.blib` would be dropped
-* `background_source: koina` without `background_fasta`
-* more than one distinct `reference_list` among OpenSWATH PRM rows, because iRT
-  anchors from one list are applied to the whole library
-* `openswath_prm_encyclopedia_quant` with `--openswath_pqp`, `_tsv` or `_traml`,
-  which EncyclopeDIA cannot read
+* a `.blib` together with `--library_sheet` or `--elib`, or `--blib` with `--dlib`
+  or `--use_koina`: one of them would be dropped
+* a background source without its inputs (`library`: `background_library`, and
+  `background_fasta` when it is a `.blib`; `predicted`: `background_fasta`;
+  `measured`: `background_sheet` and `background_fasta`), a background input the
+  source does not use (with a pointed message for `background_library` under
+  `measured` and `background_search_library` under `library`), a missing file, a
+  `background_library` or `background_search_library` that is not an `.elib`,
+  `.dlib` or `.blib`, or a `background_peptides_top` that is not a positive whole
+  number
+* a background that no library here takes: on EncyclopeDIA only a `.blib` takes
+  one, on OpenSWATH every source but `--openswath_pqp`, `_tsv` and `_traml`. When
+  one engine takes it and the other does not, a warning. Also warnings when no
+  route learns from the background (no EncyclopeDIA PRM, no OpenSWATH PRM with
+  Context-MS), and when a SIL `.blib` is searched on a PRM route without one
+* a `library_sheet` or `background_sheet` without the columns `condition` and
+  `fraction_file`, with an empty cell, a missing file, or a file EncyclopeDIA cannot
+  search and `MSCONVERT` does not convert (mzXML, for one)
+* rows of one engine and mode that name different `reference_list`s, a blank counting
+  as one (OpenSWATH DIA, which reads none, aside): a route processes one list for all
+  its runs, from the first row that names one, and on OpenSWATH PRM its iRT anchors
+  apply to the whole library
+* a `reference_list` that the route cannot read: on EncyclopeDIA PRM, Context and
+  the decoy generator read it by position (`Compound`, `Formula`, `Adduct`, `m/z`,
+  `z`, `RT Time (min)`, `Window (min)`, optional `isDecoy`); where diathem runs it
+  needs the columns `Compound`, `m/z` and `z` by name
+* a `primary_abundance` tool that does not run on one of the routes present, which
+  would leave `abundance` empty
+* an invalid `diathem_weight`, `diathem_max_fragments` or `diathem_baseline`
+* an invalid `diathem_targets_source`, or `library` with `--openswath_pqp`, `_tsv`
+  or `_traml`, which have no spectral library to take the targets from
 * PRM rows with neither a `reference_list` nor a `.blib`
 * a route with fewer runs than `quant_min_runs`, when `quant_require_min_runs` is
   set (otherwise a warning)
 
 ## 7. Scan selection and the OpenSWATH feasibility gate
 
-**Why OpenSWATH fails on crowded PRM.** A reversed decoy has its target's precursor
-m/z, so OpenSWATH extracts it from the same scans. It scores low only if its
-fragment m/z values land on noise. Spectral occupancy, the fraction of the m/z axis
-within the extraction tolerance of a real peak, is the chance a decoy transition
-hits signal, and it compounds over transitions. Those hits are fragments of
-co-isolated peptides, so they also co-elute and correlate, which are OpenSWATH's
-scores. In crowded spectra decoys cannot be told apart from targets.
+Every route keeps to one rule: a peptide is scored and quantified only in scans
+acquired for targeted analysis, and a precursor that has an isolation window of its
+own (one centred on its m/z) only in that window. Scheduled PRM breaks naive scan
+selection in two ways. Some methods interleave wide survey windows, tens of Th wide
+and acquired over the whole run, with the narrow targeted ones. And targeted windows
+overlap: the window centred on one precursor often covers other targets, but it is
+acquired only around its own target's scheduled time. A precursor scored in a survey
+window, or in another target's window, is scored in scans that were not acquired for
+it, often at a time its own window was not acquired at all, so the peak found there
+can be at the wrong retention time.
 
-**The gate.** `ASSERT_OPENSWATH_FEASIBLE` runs before `OPENSWATH_WORKFLOW` on the
-PRM route (skip with `skip_openswath_feasibility`). It measures median occupancy
-at `openswath_occupancy_tolerance` over the targeted-window MS2 scans and stops
-above `openswath_max_occupancy` (0.35), or only reports with
-`openswath_feasibility_warn_only`. Two details matter:
+**Survey scans are removed before any tool reads a run.** `REMOVE_SURVEY_SCANS` runs
+`remove_survey_scans.py` on every samplesheet run, after `MSCONVERT`. A survey window is an
+MS2 isolation window that encloses another window of the same run at most a quarter
+of its width. When a run has any, the script writes a copy without their scans: an
+`.mzML` keeps every other spectrum byte for byte, with the spectrum indices
+renumbered and the index and checksum rewritten; a `.dia` loses the matching rows
+of `spectra` and `ranges`. Other runs pass through as a link. Tiled DIA windows do
+not enclose one another, so DIA runs are unchanged.
+`isolation_windows/<sample_id>.isolation_windows.tsv` lists every window with its
+scans, RT span and whether it was removed.
 
-* measure the narrow targeted windows, not all MS2 scans: interleaved wide survey
-  scans can dominate the file and understate occupancy
-* measure across the acquisition, not inside one precursor's window, where the
-  value follows that peptide's abundance
+The runs of `library_sheet` and `background_sheet` are searched whole, survey scans
+included: they only add peptides to a library, and none of their scans is quantified.
+A background from the whole runs trained Context at least as well as one from their
+survey or their targeted scans alone (§12).
 
-The gate does not run on OpenSWATH DIA: DIA windows tile the m/z range, and the
-threshold was calibrated on scheduled PRM.
+**Own windows, per tool.**
 
-**Nested survey windows.** The same script checks whether wide survey windows nest
-around the targeted ones. If so, and `openswath_auto_matching_window` is true, it
-writes `nested_windows.flag` and `OPENSWATH_WORKFLOW` adds
-`-matching_window_only true`. An explicit `-matching_window_only` in
-`openswath_search_args` turns the automatic decision off.
+* EncyclopeDIA and Context (`contextbook`). `StripeFile.getStripes` returns every
+  scan whose window contains the requested m/z, which on overlapping windows mixes
+  in scans acquired for other targets; `IsolationWindowFilter.restrictToWindow`
+  keeps only the scans of the window being scored, matching bounds within 0.0005 Th.
+  A window's bounds repeat exactly in each of its scans, while the windows of
+  near-isobaric targets can differ by a thousandth of a Th, at different scheduled
+  times. `IsolationWindowFilter.OwnWindows`
+  decides which windows a precursor is scored in: its own window is the one whose
+  centre is closest to its m/z, within 0.01 Th, then the narrowest. Scheduled methods
+  centre the window on the target m/z, at most rounded to 0.01 Th; a wider tolerance
+  would give background precursors a window by coincidence. A precursor that
+  has one is scored only there; one that has none, a background peptide, in every
+  window that contains it. `Encyclopedia` (the DIA search), `EncyclopediaTwo` (the
+  Context PRM search) and `PeptideQuantExtractor` (quantification in `-libexport`)
+  apply both. Quantification needs it as much as the search: a PSM extracted from
+  several windows is written to the `.elib` once, from the window with the best
+  integration score, which need not be its own. The Java property
+  `encyclopedia.exactIsolationWindow=false` switches both off; TEAPOT never sets
+  it. Tiled DIA windows overlap at most at their edges, where no window is centred,
+  so neither changes a DIA search.
+* Context matches the reference list by sequence and charge, and keeps the best
+  feature per precursor. Keeping the best feature per sequence let a charge state
+  the method did not target, scored in another target's window, stand in for the
+  targeted precursor.
+* OpenSWATH. `OPENSWATH_WORKFLOW` adds `-matching_window_only true` on the PRM route,
+  so each assay is extracted from its best-matching window only, unless
+  `openswath_search_args` sets the flag. Not on DIA, whose windows tile.
+* diathem counts a scan for a target when the scan's isolation target m/z is within
+  `--precursor-tol` of the target m/z. `diathem_quant.py` measures,
+  over the route's runs, how far each target lies from the nearest isolation target.
+  When at least half the targets have one within 0.05 Th, the runs were acquired for
+  these targets, and the tolerance is twice the 95th percentile of those distances
+  plus 0.0005 Th: each target's own window and no other. The percentile keeps a
+  target the method did not acquire, lying near another window by chance, from
+  widening it; such targets get no scans, and the log counts them. Scheduled methods
+  set the isolation target to the target m/z, while distinct targets can lie a
+  hundredth of a Th apart, so a fixed tolerance such as 0.02 Th already mixes in
+  other targets' windows. Otherwise
+  the default for the samplesheet `mode` applies (12.5 on DIA, 0.5 on PRM).
+  `diathem_precursor_tol` overrides it; the value and the reason are in the diathem
+  log and `versions.yml`.
 
-**EncyclopeDIA does this inside the jar.** `IsolationWindowFilter` in `contextbook`
-keeps, for each precursor, only the scans acquired for its exact isolation window.
-It is controlled by the Java property `encyclopedia.exactIsolationWindow` (default
-true), which TEAPOT never sets. It does nothing when scans have at most one
-distinct window (uniform DIA), and falls back to all overlapping scans when none
-match exactly. It is used by `Encyclopedia` (DIA search), `EncyclopediaTwo` (the
-Context PRM path) and `PeptideQuantExtractor` (quantification). PARAMETERS.md §10
-describes the user-facing behavior.
+**Retention time.** A target's own window is acquired only around its scheduled
+time, so own-window selection is itself the RT restriction on scheduled PRM. diathem
+reads the whole run on every route with a reference list (`--rt-window 0`): the
+list's RT may be on another scale than the runs (a vendor `.blib`, a method built on
+another gradient), and a window centred on it can cut the peak. Targets identified on
+DIA carry the RT the runs measured, and there diathem reads a window around it whose
+width the runs give (§3).
+
+**The OpenSWATH feasibility gate.** A decoy that keeps its target's precursor m/z
+is extracted from the same scans. It scores low only if its fragment m/z values land
+on noise. Spectral occupancy, the fraction of the m/z axis within the extraction
+tolerance of a real peak, is the chance a decoy transition hits signal, and it
+compounds over transitions. Those hits are fragments of the peptides isolated in
+that window, so they also co-elute and correlate, which is what OpenSWATH's
+chromatogram scores measure. OpenSWATH also scores the spectrum at each peak's apex
+(b and y ions, a dot product, mass error), but at tolerances of its own,
+`-Scoring:DIAScoring:dia_extraction_window` (default 0.05 Th) and
+`dia_byseries_ppm_diff` (10 ppm), which no template sets: on ion-trap data those
+scores are mostly zero, and set to the ion trap's tolerance they tell a standard
+from its own decoy only somewhat better. In crowded spectra decoys cannot be told apart
+from targets.
+
+`ASSERT_OPENSWATH_FEASIBLE` measures this on every run of the OpenSWATH PRM route,
+and `OPENSWATH_WORKFLOW` starts on a run once its check has passed (skip with
+`skip_openswath_feasibility`). It measures median occupancy at
+`openswath_occupancy_tolerance` over MS2 scans of the narrowest isolation width and
+stops above `openswath_max_occupancy` (0.35), or only reports with
+`openswath_feasibility_warn_only`. It measures across the acquisition, not inside
+one precursor's window, where the value follows that peptide's abundance. It does
+not run on OpenSWATH DIA: DIA windows tile the m/z range, and the threshold was
+calibrated on scheduled PRM.
 
 ## 8. Quantification decisions
 
-* **`abundance_primary` is exactly the column of the tool named in
-  `primary_abundance`, with no fallback.** A row-wise fallback mixed tools within
-  a light/heavy pair and across peptides in one column. Every tool keeps its own
-  `abundance_*` column.
-* **Absolute-quant tables.** `peptide.abs_quant.long.tsv` carries a
-  `method = primary` slice, which `peptide.abs_quant.matrix.tsv` pivots.
-  `peptide.pairs.tsv` has one set of rows per tool and excludes that slice, which
-  would repeat one tool. `peptide.pairs.confident.tsv` keeps the primary tool's
-  pairs whose worse channel $q$ value passes `fdr`.
+* **`abundance` is exactly the column of the tool named in `primary_abundance`,
+  with no fallback.** A row-wise fallback mixed tools within a light/heavy pair and
+  across peptides in one column. `base_quant` calls it `abundance_primary`; the
+  reporting tables call it `abundance` and keep an `abundance_<tool>` column for
+  each tool with values on the route. Pre-flight refuses a `primary_abundance`
+  tool that does not run on a route present.
+* **diathem's weighting.** `diathem_weight` (default `nmf5_varexp`) becomes
+  `--weight` unless `diathem_args` carries one. `nmf5_varexp` decomposes each
+  peptide's (run, scan, fragment) signal into five components and weighs each
+  fragment by the share of its variance the peptide's component explains, so a
+  fragment that a co-isolated peptide also feeds counts less. Settings for Stellar
+  ion-trap PRM were chosen on three yardsticks, each scored only on the rows the
+  search detected, paired across settings and tools: fold-change accuracy on the
+  T-cell dilution curve and on the mouse 100 % / 10 % pair, and run-to-run
+  precision on the 25 plasma SIL QC runs (heavy abundance, and light/heavy ratio).
+  With the background term on, `nmf5_varexp` is diathem's most accurate scheme on
+  both curves, as in diathem's own PRM bench, and the least precise of those
+  tried; the `beta_kl` family (inverse fitted intensity, prmherd's KL loss) is
+  more precise but less accurate. EncyclopeDIA is more precise than every diathem
+  setting on the SIL QC runs and more accurate near the detection limit, so the SIL
+  and label-free templates keep `primary_abundance: encyclopedia`; diathem is
+  more accurate at moderate fold changes. `poisson`, diathem's default, weights
+  the observed intensity, so points that happen to read low weigh more, and is
+  the least accurate. The schemes built on diathem's measured noise law
+  (`inverse_variance`, `noise_adherence`) are not offered: on an ion trap the
+  faint points carry a pedestal of co-isolated signal rather than reading zero,
+  and those weights lean on exactly the faint points. Two crops were tried and
+  dropped: the bench's +/-45 s crop around the apex helped the single-batch curve
+  but hurt the SIL cohort, run over several days, whose retention times drift
+  further than the crop's search range; a crop around each precursor's median
+  measured retention time made the SIL QC runs less precise. `quant_nmf5`,
+  `quant_k2` and the other bench-only methods exist only in diathem's benchmark
+  scripts, not in `diathem quant`.
+* **diathem as its PRM benchmarks run it.** Those fit only the brightest library
+  fragments (eight, from 200 m/z; more fragments trade accuracy at low abundance
+  for precision) and the solver's flat per-run, per-transition background term,
+  capped below the peak, which absorbs the pedestal. `diathem quant` on diathem
+  `main` offers only `poisson` and `uniform`, fits every theoretical b/y fragment
+  from 150 m/z, and its `--library-top-k` limits only the prior. diathem's
+  `teapot` branch, whose image TEAPOT pins (§4, §10), lets `--weight` take every
+  registered scheme that needs no noise model and adds `--max-fragments` and
+  `--background`. `DIATHEM_QUANT`
+  passes `diathem_weight`, `diathem_max_fragments` (8) and `diathem_baseline`
+  (true) where `diathem quant --help` shows them, and otherwise logs that it uses
+  `uniform`, every fragment or no baseline. diathem's background term is part of
+  the abundance model and unrelated to TEAPOT's background peptides.
+* **EncyclopeDIA's amounts come from the cross-run export, detection from each
+  run.** `MERGE_QUANT_ENCYCLOPEDIA_*` read `peptidequants` of the `analysis`
+  export, while `detected` is each run's own q value. The export runs Percolator
+  again over each peptide's best match across all runs and, at its own 1 %, left
+  out peptides the runs had detected, so they had no amount. On routes with a
+  reference list the `analysis` export therefore runs with `-percolatorThreshold 1`
+  (`ENCYCLOPEDIA_LIBEXPORT`'s `quantify_all`): every scored peptide is quantified,
+  which adds the missing amounts and leaves every other amount unchanged. The GPF
+  library and background exports keep the filter, since there it decides what the
+  library holds. A peptide still gets no amount in any run when fewer than
+  `-minNumOfQuantitativePeaks` (3) of its fragments trace its peak well across the
+  runs: `EncyclopediaTwoPeakLocationInferrer.getArchetypals` picks those fragments,
+  `SimplePeakLocationInferrer.getQuantitativeData` returns nothing below the
+  minimum, and `LibraryFile` writes no `peptidequants` row. On the plasma SIL
+  cohort these are peptides whose vendor library spectrum holds only a few
+  fragments, detected or not.
+* **Reporting tables (`FINALIZE_QUANT`).** One status: `detected` is
+  `q_value <= fdr`. The reference set is the reference list's (peptide, channel)
+  pairs, or without a list every pair detected in at least one sample, so a DIA
+  route reports the peptides it found rather than everything the search scored.
+  `quant.reference.confident.tsv` is the detected rows of `quant.reference.tsv`;
+  other peptides, a larger library's or a background's, are only in `quant.full.tsv`.
+  Membership ignores charge. The summary counts reference peptides per sample, a
+  peptide being detected when any of its charges is, and quantified when the
+  `primary_abundance` tool gave that detection an abundance. When the reference
+  holds both channels of a peptide it counts light/heavy pairs instead: both
+  channels detected at one charge, as `QUANTIFY_HEAVY_LIGHT` pairs them, and
+  quantified when the `primary_abundance` tool's two peaks pass the co-elution
+  check below, so `pairs_quantified` equals the confident absolute-quant rows (less
+  what `min_consistency` drops there). On SIL runs with a reference list, reference
+  peptides with no light form in it (an iRT tag's) are neither counted nor shown in
+  `quant.reference.tsv` and `quant.reference.confident.tsv`; `quant.full.tsv` keeps them.
+  Reference decoys are neither counted nor added as rows. Rows only diathem
+  reported take their protein from the same peptide's other rows. A peptide left
+  without one (a reference peptide no tool reported, or one only diathem measured)
+  takes the FASTA entries that contain it, named as EncyclopeDIA names them (the
+  header up to the first space, several joined by `;`). `QUANTIFY_HEAVY_LIGHT` fills
+  its pairs the same way, so a pair only diathem measured can still be matched to a
+  protein-keyed amount, and an iRT tag's peptide to `complete_channels_skip_proteins`.
+  A user's OpenSWATH-native library may name proteins otherwise; only empty cells
+  are filled. The tables are written with `\n` line ends.
+* **A light/heavy pair must co-elute.** A light peptide and its 13C/15N standard
+  elute together, so a ratio of peaks measured at different times compares two
+  different peaks. The check compares where each tool measured the two channels,
+  not where the search detected them: `rt_encyclopedia_seconds` (the centre of the
+  `peptidequants` integration), `rt_diathem_seconds` (diathem's apex), and for
+  OpenSWATH and TRIC the identified feature (`rt_apex_seconds`, which on the
+  EncyclopeDIA routes is the search's apex, read from `PSMId`). EncyclopeDIA's
+  export aligns retention times across runs and integrates each peptide where the
+  alignment puts it. By design, that rescues some peaks a run's own search got
+  wrong, and pairs it brings together give the ratio the same peptide has in other
+  replicate runs; but it also integrates one channel of a pair away from the other,
+  and those ratios are as far off as pairs detected apart. On the plasma SIL QC
+  runs, replicates of one pool, ratios degrade steadily with the gap between the
+  two measured peaks and, beyond about half a peak width, are no better than pairs
+  half a minute apart; hence `pair_rt_tolerance_seconds` 9, half the typical peak
+  width there. diathem fits each precursor on its own over the whole run, so it
+  measures the two channels apart far more often than EncyclopeDIA. `0` turns the
+  check off; a pair with a missing retention time is kept and counted in the logs.
+* **Absolute-quant tables.** `peptide.abs_quant.tsv` has every light/heavy pair of
+  every tool, with a `status`, each channel's `light_detected` and `heavy_detected`,
+  the two measured retention times, `co_eluting`, and `confident`, true for exactly
+  the rows of `peptide.abs_quant.confident.tsv`, so that table is a filter on one
+  column and a reader needs neither the rule nor the `fdr`.
+  `peptide.abs_quant.confident.tsv`, the matrix and the protein table all come from
+  one set: the `primary_abundance` tool's pairs with both channels detected,
+  co-eluting, and a known amount. Pairs of `complete_channels_skip_proteins` are
+  dropped rather than listed with a status of their own, and on OpenSWATH DIA only
+  the best peak group of each channel is paired. Each tool's pairs come from the
+  rows that tool or the search reported. diathem reports every reference precursor
+  in every run, and a row only it reported makes no pair of another tool, so
+  EncyclopeDIA's and OpenSWATH's rows are the same with diathem on or off, but for
+  diathem's own `light_consistency` and `heavy_consistency`. Only precursors with a
+  heavy row in some run are paired: one without has no standard, such as a
+  background peptide on the PRM route, whose `analysis` export quantifies every
+  scored peptide. `QUANTIFY_HEAVY_LIGHT` has no reference list, so a standard whose
+  heavy no run reported is left out too; its light alone gives no amount. A channel
+  a tool did not quantify is summed with `min_count=1` and stays missing instead of
+  becoming 0.
 * **No silent empty tables.** `heavy_label` set but no heavy rows in the merged
   table is an error, and so is a table where both channels exist but no pmol could
   be attached.
@@ -432,11 +709,14 @@ describes the user-facing behavior.
   * charge: Percolator and Context encode it only in `PSMId`
     (`<file>:<rt>:<pepModSeq>+<charge>`)
   * channel: a heavy peptide and its light twin share sequence and charge;
-    without `channel` every ratio became 1
+    without `channel` every ratio became 1. On OpenSWATH PRM the peptide-level
+    $q$ values join on channel too, else a heavy and its light twin took each
+    other's
   * flanking residues: Percolator writes `-.PEPTIDE.-`, the `.elib` writes
     `PEPTIDE`
-  * file name to sample: EncyclopeDIA names outputs after the full input name, so
-    `sample_map` stems are matched as prefixes in both directions
+  * file name to sample: each route's `sample_map` is built from the files it
+    receives, after `MSCONVERT`; EncyclopeDIA names outputs after the full input
+    name, so its stems are matched as prefixes in both directions
 * **EncyclopeDIA abundance comes from the `.elib` `peptidequants` table**, which
   keeps precursor charge. `analysis.elib.peptides.txt` sums charges and is read
   only when the `.elib` is missing or empty. libexport writes it only when it
@@ -466,23 +746,32 @@ fails at load in `ADD_DECOYS_TO_REFERENCE_LIST`.
 
 Both are pulled as images; these are the changes an upgrade must keep.
 
-**EncyclopeDIA: `contextbook`, branch `teapot`, image `6.8.29-teapot`.**
+**EncyclopeDIA: `contextbook`, branch `teapot`, image `6.10.9-teapot`.**
 
 | change | why |
 |---|---|
 | CLI entry points for `ContextMProphetExecutor` and `ContextWindowExtractor` | callable from a pipeline |
 | bounds checks on the precursor isotope packet, empty chromatograms and empty traces | crashes on sparse PRM |
-| scoring restricted to each precursor's own isolation window (§7) | scheduled PRM with survey scans |
+| `IsolationWindowFilter`: a window is scored against the scans acquired for it (§7) | overlapping windows on scheduled PRM |
+| `IsolationWindowFilter.OwnWindows`: a precursor with a window centred on it is scored and quantified only there; window bounds matched within 0.0005 Th instead of 0.01 (§7). Since `6.10.9-teapot` | otherwise it is also scored in other targets' windows, at times its own was not acquired |
+| Context matches the reference list by sequence and charge, best feature per precursor (§7), since `6.10.9-teapot` | per sequence, an untargeted charge state could stand in for the targeted one |
 | user-supplied search parameters on the Context path; a `-background`/`-reference` feature-file mode | `-ftol` and friends reach Context |
+| `ContextFeatureScorer` splits the features once (§3), since `6.10.9-teapot` | the LDA was trained on duplicated background features and on the reference features it scored |
 | `Locale.US` formatting, pi0 capped at 1.0, delimiter auto-detection, optional `isDecoy`, Koina URL helper | correctness |
 | real version, unused native dependencies dropped, pinned image base | reproducible, smaller image |
+| `pom.xml` names the javacpp and openblas linux-x86_64 jars, since `6.10.9-teapot` | Maven 3.10 no longer resolves them through ND4J's POMs, and ND4J cannot load without them |
 
-**diathem: `main` of `statisticalbiotechnology/diathem`**; TEAPOT pins it by digest.
-Adds `--fragment-tol-th` (`diathem_fragment_tol_th`). Ion-trap fragment error is
+**diathem: branch `teapot` of `statisticalbiotechnology/diathem`**, `main` (72d07af)
+plus options of `diathem quant`; TEAPOT pins its image by digest. `main` adds
+`--fragment-tol-th` (`diathem_fragment_tol_th`). Ion-trap fragment error is
 roughly constant in Th, which no single ppm value can express; with ppm tolerances
 on ion-trap data the shared fragment-ratio fit collapsed onto one fragment. Without
-the flag the ppm behavior is unchanged. The image also installs `procps`, so
-Nextflow can collect task metrics.
+the flag the ppm behavior is unchanged. The `teapot` branch adds `--weight` with
+every registered scheme that needs no noise model (`diathem_weight`), `--max-fragments`,
+the fragments the library predicts brightest (`diathem_max_fragments`), and
+`--background`, the solver's flat baseline (`diathem_baseline`); their defaults leave
+`diathem quant` as on `main`. The image also installs `procps`, so Nextflow can
+collect task metrics.
 
 ## 11. Testing a change
 
@@ -509,9 +798,13 @@ end to end.
   reference peptides present in the library, not by the whole list. Compare
   stripped sequences (the reference list has modifications) and use
   `identified_peptides`, not rows: OpenSWATH reports several rows per peptide.
-* **OpenSWATH counts vary between identical runs**, most on dilute samples.
-  EncyclopeDIA (`-seed 1`) returned the same counts every run. Replicate before
-  comparing OpenSWATH settings.
+* **OpenSWATH counts varied between identical runs**, most on dilute samples.
+  EncyclopeDIA (`-seed 1`) returned the same counts every run. On the Context route
+  the cause was row order: OpenSWATH's feature ids are random per run, the features
+  came out in id order, and Context's seeded result depends on the order of its
+  input. `SPLIT_OPENSWATH_FEATURES` now orders them by precursor and retention
+  time, and repeated OpenSWATH runs of one file then give Context identical input.
+  The pyprophet route was not rechecked; replicate before comparing its settings.
 * **Rejected: a reference-only OpenSWATH library** scored with pyprophet (the
   structure of the EncyclopeDIA SIL route). It did not beat the full library with
   Context-MS and was less stable (a run aborted with `pi0 <= 0`). There is no
@@ -521,26 +814,199 @@ end to end.
   the route. The same test exposed that `-min_transitions 6` on a 5-transition
   library makes OpenSwathAssayGenerator write an empty library and exit 0, which
   `OPENSWATH_DECOY_GENERATOR` now refuses.
+* **Run every route with `run_diathem` on before trusting it.** The OpenSWATH
+  routes passed diathem the `.pqp` as its prior library, which it cannot read, and
+  no test had diathem on there, so it went unnoticed.
+* **msconvert works on the login node and not on compute nodes** when they have
+  256 CPUs (§4, Tool quirks). Debug Wine with `WINEDEBUG=+seh,+process`: the failure
+  was an integer division by zero inside .NET, not a Wine error message.
+* **Unresolved: OpenSwathDecoyGenerator makes no decoy for many heavy-labelled
+  precursors** (none at all with the default `-switchKR true`), so a library with
+  both channels falls below its `-min_decoy_fraction` and library preparation for
+  OpenSWATH stops. Light precursors are unaffected.
+* **A tool scores a precursor in every window that contains it unless told
+  otherwise.** EncyclopeDIA, Context and their quantification did, and diathem
+  with a half-window tolerance did much the same. On scheduled PRM that put
+  identifications and abundances at times the precursor's own window was not
+  acquired (§7). Check a scan-selection change
+  against the acquisition, with `isolation_windows/` and each PSM's retention
+  time, not only against the counts.
+* **Those extra windows had been training Percolator.** EncyclopeDIA writes one
+  Percolator row per library entry and window: the target or its decoy, whichever
+  scores higher. With a reference-only library, own-window scoring leaves one row
+  per entry and few decoys, and on SIL runs some correct identifications fell just
+  above the threshold. Removing the survey scans alone changed nothing: the rows
+  that mattered came from other targets' overlapping windows. Pooling Percolator
+  over a cohort's runs did not restore them.
+* **Identify and quantify in the same window.** Identifying a precursor in any
+  targeted window but quantifying it in its own window recovered most of the SIL
+  identifications the own-window rule costs, but where the best evidence came
+  from another target's window, the run's amount was measured in the own window
+  at that other window's time and read near zero. The rule applies to both.
+* **MS2-only runs.** The SIL plasma files hold no MS1 scans, and OpenSwathWorkflow
+  with MS1 scoring on (`-enable_ms1 true`, in the default and template search
+  arguments) crashes in the extraction. `OPENSWATH_WORKFLOW` turns it off for a run
+  without MS1 scans.
+* **OpenSWATH does not certify SIL standards on crowded PRM**, with pyprophet or
+  Context-MS. It finds most standards where EncyclopeDIA does, yet almost no target
+  passes 1 %. A shuffled decoy made with `-switchKR false` (with the default `true`,
+  heavy standards get none) keeps its target's precursor m/z, so it is read from
+  the same few scans, and OpenSWATH's scores rank a standard above its own decoy
+  little more often than chance: its co-elution and shape scores not at all, its
+  library-intensity and spectrum scores only somewhat. EncyclopeDIA differs twice.
+  Its main score, a spectrum match to the library multiplied by how well the
+  fragments' traces co-elute, ranks almost every standard above its own decoy. And
+  it scores each library entry together with its own decoy and passes on only the
+  better one (`TDCPeptideScoringResult`), so a decoy that loses to its standard
+  never reaches Context or Percolator, while OpenSWATH passes every decoy on. The
+  same competition applied to OpenSWATH's scores does not rescue it. So the engines
+  do not differ as chromatograms against spectra: both read both. A comparison of
+  the two engines' feature tables must account for the competition, which has
+  already removed the hardest decoys from EncyclopeDIA's. RT calibration is not the
+  obstacle: a scheduled acquisition reads each assay only around its expected time
+  anyway.
+* **EncyclopeDIA's `-frag` names ion series, not the activation.**
+  `FragmentationType`: `CID` is "CID/HCD (B/Y)", the default, and `HCD` is "HCD
+  (Y-Only)". It also decides what a decoy moves (`LibraryEntry.getDecoy`: under `HCD`
+  only the y ions; other library peaks stay at the target's m/z). The ion-trap
+  templates set `-frag HCD`. On Stellar PRM, whose MS2 is HCD read out in the ion trap,
+  b and y ions identified about as many peptides and pairs, but their amounts agreed less
+  with the other peptides of the same protein (SIL) and followed the T-cell dilution
+  less closely. `-instrument` (default `Orbitrap/Orbitrap`) is a preset:
+  `Iontrap/Iontrap` also sets the precursor tolerance, merges and filters each
+  spectrum's peaks when a run is read (`-filterPeaklists`), and multiplies the main
+  score by the number of well co-eluting fragments. With b and y ions it did no better.
+  `ContextMProphetExecutor` takes only the instrument flag, not the rest of the preset
+  (it never calls `InstrumentSpecificSearchParameters.checkParameters`), and
+  `Args.inherit` does not pass `-instrument` to libexport. `sheet_search_args`
+  defaults to empty, so the runs of `library_sheet` and `background_sheet` are
+  searched at Orbitrap tolerances unless it is set.
 * **Cross-run EncyclopeDIA quantification** needs two or more runs.
   `ContextMProphetExecutor` writes no per-file `.elib`, which the aligner reads, so
   the PRM route needs `ENCYCLOPEDIA_LIBEXPORT_PER_SAMPLE`; without it alignment
   failed at any cohort size.
-* **Measured background for SIL runs** (built outside the pipeline, passed as
-  `background_source: elib`): pool it over as many runs as possible, since a
-  single-run background was larger and noisier. Raise
-  `-numberOfQuantitativePeaks` when building it: the default 5 caps
-  transitions below OpenSwathAssayGenerator's `-min_transitions 6`.
+* **A background for SIL PRM need not be well identified, only measured.** A DIA
+  search of the wide survey scans alone finds no initial Percolator direction per
+  run, and its identifications are mostly wrong: few recur at the same time in a
+  second run, they follow library size rather than abundance, and their RTs do not
+  fit the vendor's iRT values. Yet a background built from them, pooled over QC
+  runs, trains Context nearly as well as one from a normal search of the whole
+  files, though less evenly across runs, with heavy and light still co-eluting; it only gets through with the RT
+  guards relaxed (`rt_harmonize_fallback = 'full_window'`, a wide
+  `rt_coherence_max_range_ratio`, no IQR overlap). The whole files search
+  normally, align to the vendor's RTs and pass the guards as they are; a handful
+  of QC runs is enough, and so are the targeted scans alone (survey scans
+  removed), so runs without survey scans can supply one. `background_sheet` runs
+  are searched whole. A background predicted
+  from every peptide of a plasma protein FASTA fails, training nothing in most runs: almost none of its
+  entries are in the sample, so Context's model learns what tells a predicted target from its decoy
+  (protein C-terminal peptides crowd its best hits) rather than what a real peak
+  looks like, and passes thousands of background entries but almost no reference
+  peptides. Predicted from only the peptides the Human Plasma PeptideAtlas observes
+  most often (`background_peptides` with the build's tables: the top 5,000 of a
+  library predicted for a plasma FASTA), it trains Context nearly as well as a measured one, though less
+  evenly across runs, and the result moves with the exact peptide set: the same 5,000 peptides
+  predicted from a peptide FASTA, which also digests missed-cleavage peptides into
+  shorter ones, did clearly worse. Over 25 QC runs the PRM route quantified
+  fewer light/heavy pairs than the same runs searched in DIA mode in nearly every
+  run, with a measured or a predicted background alike; hence the SIL template's
+  DIA mode. When a background is built from other measurements, raise
+  `-numberOfQuantitativePeaks`: the default 5 caps transitions below
+  OpenSwathAssayGenerator's `-min_transitions 6`.
+* **A heavy standard can go unreported in a run that acquired it.** EncyclopeDIA
+  scores each library entry together with its decoy and keeps only the better of
+  the two (`TDCPeptideScoringResult`, `trim(1)` in
+  `EncyclopediaTwoPointOneScoringTask`), so a standard whose match is weak in a run
+  is replaced by its decoy there and gets no q value at all; others stay just above
+  1 %. Acquisition is rarely the reason: on the plasma SIL cohort the standards'
+  own windows were scanned across their elution in almost every miss. A few
+  standards account for most misses, and the spike amount explains little of it.
+* **A measured background from replicate runs.** Gas-phase fractions put each
+  peptide in one fraction, so it gets one library entry; replicate runs, such as QC
+  injections, give one entry per peptide and run. When `merge_libraries.py` adds a
+  background to the search library it therefore keeps only the best-scoring entry
+  of each precursor.
+* **One setting, one meaning.** When a setting for the background also named the
+  assay library, `PREPARE_LIBRARY_ENCYCLOPEDIA` took it as the assay library,
+  skipping the vendor library and the merge without a word. A stub run showed it:
+  no `BLIB_TO_DLIB`, `SEARCH_GPF` or `MERGE_LIBRARIES` in the plan. Hence the
+  background's own inputs (§3).
+* **A background needs its own FASTA.** On SIL runs `--fasta` is the vendor's
+  FASTA, and `BlibFile` drops every `.blib` entry no FASTA entry holds, so a `.blib`
+  background converted with `--fasta` would lose every entry outside the standards'
+  proteins; no `.blib` background was ever tested. For a searched background the
+  FASTA made no difference in a test: searched with the same `.dlib` and only the
+  vendor's FASTA as `-f`, it came out identical, protein table included, to the one
+  built with the plasma proteins appended to `--fasta`. `PREPARE_BACKGROUND` still
+  gives every step `background_fasta`: that the search ignores `-f` is EncyclopeDIA's
+  behavior with this one library, not something to build on.
+* **Percolator-style tables end with a `pi_0=...` line.** Context's
+  `*_reference.features.pep.output.txt` and EncyclopeDIA's `.encyclopedia.txt` both
+  do. Read as a row, it gave every run on the EncyclopeDIA routes one row without a
+  peptide in `base_quant.long.tsv`, `quant.full.tsv` (`nan`) and
+  `peptide.abs_quant.tsv`; the mergers now drop it, as `select_diathem_targets.py`
+  already did.
+* **A branch the tests never run can be broken.** After `ENCYCLOPEDIA_LIBEXPORT`
+  gained its `quantify_all` input, the OpenSWATH `library_sheet` path still passed
+  five inputs, which fails as soon as that branch runs. Stub one run of every
+  library and background source after changing a shared module.
+* **One tool's rows in another tool's pairs.** `QUANTIFY_HEAVY_LIGHT` built every
+  tool's pairs from all rows of the merged table. diathem reports every reference
+  precursor in every run, so with it on, EncyclopeDIA gained pairs it never
+  measured, listed without amounts, and a pair with one channel only diathem
+  reported took that row's protein and consistency. Each tool now pairs only the
+  rows it or the search reported (§8).
+* **Background peptides in the pair table.** On the PRM route the merged table also
+  holds every background peptide the `analysis` export quantified, and pairing every
+  row listed them as pairs whose standard was missing: most of
+  `peptide.abs_quant.tsv`, some with their protein's known amount. The confident
+  table was not affected. Pairs now need a heavy row in some run (§8).
+* **A background renamed the reference peptides' proteins.** `merge_libraries.py`
+  added every peptide-to-protein link of the background, also to reference peptides
+  the background holds as well. A kit peptide then carried the background FASTA's
+  entry beside its kit entry only when the background runs' search happened to report
+  it, so every table on the route named some proteins two ways, and the protein table
+  gave such a protein two rows, each a median of part of its peptides. Naming every
+  kit peptide by both FASTAs would still split a protein whose short peptide also
+  occurs in an unrelated protein, and the names would change with
+  `background_fasta`. A peptide the reference library links now keeps only those
+  links (§3); on the OpenSWATH PRM route only the assay library's protein names
+  change.
+* **A confident table beyond the reference.** `FINALIZE_QUANT` wrote every detected
+  peptide to `quant.confident.tsv`, while OUTPUTS.md said reference peptides only. On
+  a DIA run whose library holds more than its reference list, most of the table was
+  other peptides. The table is now the detected rows of `quant.reference.tsv`, named
+  `quant.reference.confident.tsv` to say so.
+* **OpenSWATH draws new decoys on every run.** `OpenSwathDecoyGenerator` shuffles
+  with a fresh random draw: the same assay library twice gave decoys with no sequence
+  in common. Whenever `OPENSWATH_DECOY_GENERATOR` runs again, as after any change to
+  the library, the OpenSWATH routes' scores move as with a new random seed.
+* **One run per FASTA cannot rank background FASTAs.** The search of the background
+  runs reports about the same share of whatever library it is given, so what it
+  finds follows the library rather than the sample, and the cross-run Percolator of
+  `ENCYCLOPEDIA_LIBEXPORT` stops at EncyclopeDIA's default 10 iterations with its
+  count still growing; where it stops sets the background. The same proteins from
+  two UniProt releases, differing in two sequences, gave backgrounds of very
+  different size and moved the pairs as much as any switch between the plasma
+  FASTAs tried: a whole proteome, UniProt's secreted proteins, HPA's blood MS list,
+  PeptideAtlas plasma, and HPA's list with the albumin and immunoglobulins it lacks
+  added. Reruns of the same input gave the same background, so the spread shows
+  only when the input changes. Choose the FASTA by what may be in the sample
+  (INPUTS.md).
 
 ## 13. Deferred: inferring engine and settings from the data
 
-Not built on purpose at this stage. Part of it exists: `ASSERT_OPENSWATH_FEASIBLE` already reads
-the acquisition, answers "can OpenSWATH work here?", and sets
-`-matching_window_only` on its own.
+Not built on purpose at this stage. Part of it exists, under the rules below:
+`REMOVE_SURVEY_SCANS` finds survey windows, `DIATHEM_QUANT` measures whether the
+targets have windows of their own (§7), and `ASSERT_OPENSWATH_FEASIBLE` answers
+"can OpenSWATH work here?". A value the user set wins, every decision is recorded
+(`isolation_windows/`, diathem's log and `versions.yml`), and when the targets have
+no windows of their own diathem keeps the defaults.
 
 | decision | evidence | effort |
 |---|---|---|
 | fragment tolerance by instrument class | mzML instrument metadata, scan filter strings (`ITMS`/`FTMS`) | easy |
-| PRM or DIA | window count, widths, tiling or nesting | easy; `nested_fraction()` exists |
+| PRM or DIA | whether the targets have windows of their own | done for diathem's tolerance (§7) |
 | OpenSWATH or EncyclopeDIA | occupancy | implemented |
 | heavy/light labeling | paired peptidoforms in the library | moderate |
 | reachable fraction of the reference list | library and reference list, stripped sequences | easy |

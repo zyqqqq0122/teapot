@@ -19,12 +19,12 @@ sample_B,/data/sample_B.raw,PRM,/data/reference.csv,encyclopedia
 | `sample_id` | your name for the run |
 | `file` | one acquisition. See run files below |
 | `mode` | `PRM` or `DIA` |
-| `reference_list` | the reference peptides for this run. Can be blank |
+| `reference_list` | your reference peptides: the same file on every row of an engine and mode, or blank on all of them. See the reference list below |
 | `engine` | `encyclopedia` or `openswath`. Defaults to `encyclopedia` |
 
 ## Run files: the `file` column
 
-Either an open format (`.mzML`, `.mzXML`) or a vendor format the pipeline
+Either an open format (`.mzML`; `.mzXML` with OpenSWATH only) or a vendor format the pipeline
 converts for you inside a container: `.raw` (Thermo), `.wiff` (SCIEX), `.d`
 (Bruker/Agilent), `.lcd` (Shimadzu). No local ProteoWizard install.
 
@@ -41,7 +41,7 @@ Supply exactly one library source:
 |---|---|
 | `--blib` or `--dlib` | a spectrum library: peptides with their fragment spectra |
 | `--elib` | a chromatogram library, built from GPF runs, so it carries measured retention times (RT) |
-| `--library_sheet` | the GPF runs themselves, listed in a CSV of `condition` and `fraction_file` ([template](templates/library_sheet.csv)). The pipeline searches them to build an `.elib` |
+| `--library_sheet` | the GPF runs themselves, listed in a CSV of `condition` and `fraction_file` ([template](templates/library_sheet.csv)), as mzML or in a vendor format the pipeline converts. The pipeline searches them, with `--dlib` or with a library predicted from your FASTA (`--use_koina`), to build an `.elib`. Files sharing a `condition` are merged into one run first, as the fractions of one sample |
 | `--use_koina` | a switch: the pipeline predicts a spectrum library from your FASTA |
 
 Those all work on either engine. OpenSWATH additionally accepts three formats
@@ -76,21 +76,60 @@ LGGNEQVTR	-24.92	1
 GAGSSEPVTGLDAK	0.00	1
 ```
 
-## The background: `--background_library` or `--background_fasta`
+## The background: `background_source`
 
 Needed only by Context and Context-MS, and only when your assay library contains
 your reference peptides and nothing else. A vendor kit library is exactly that
-case. Supply either:
+case. The background is a library: one you supply, one predicted from the proteins
+of your samples, or one built from a few of your runs; [PARAMETERS.md
+§4](PARAMETERS.md#4-the-background-library) explains how to choose. What you supply:
 
-| source | what it is |
+| you supply | what it is |
 |---|---|
-| `--background_library` | an `.elib`, `.blib` or `.dlib`, matching `background_source` |
-| `--background_fasta` | a FASTA of the proteins potentially present in your samples |
+| `background_library` | a background library you already have: an `.elib`, `.dlib` or `.blib` |
+| `background_fasta` | a protein FASTA of the proteins potentially present in your samples. With `background_peptides`, your species' whole proteome works as well. Not the vendor kit's FASTA, which holds only the standards |
+| `background_peptides` | the peptides to keep of a predicted background: the tables of a PeptideAtlas build, or a list of peptides. See below |
+| `background_sheet` | a few runs of samples like yours to build the background from, listed as in `library_sheet` ([template](templates/background_sheet.csv)), each under a `condition` of its own. Your PRM runs can be used as they are, as mzML or in a vendor format the pipeline converts |
+| `background_search_library` | a spectrum library to search the `background_sheet` runs with, instead of a prediction from `background_fasta`: an `.elib`, `.dlib` or `.blib` |
+
+### Peptides to keep: `background_peptides`
+
+Either of two files. The pipeline predicts the peptides of the proteins in
+`background_fasta`, then keeps only those this file names, so it always comes
+together with `background_fasta`.
+
+**The tables of a PeptideAtlas build.** [PeptideAtlas](https://peptideatlas.org/builds/)
+counts how often each peptide was observed in the public data of one sample type.
+Give the build file as it is; unpacking it is not needed. The pipeline reads `peptide.tsv`
+and `peptide_instance.tsv`, and keeps the `background_peptides_top` peptides
+observed most often.
+
+**A list of peptides**, any you choose: a text file with one peptide per line (a
+header line such as `peptide` is skipped; in a CSV or TSV the first column is read):
+
+```
+peptide
+LGGNEQVTR
+GAGSSEPVTGLDAK
+```
+
+or a FASTA of peptides:
+
+```
+>pep1
+LGGNEQVTR
+>pep2
+GAGSSEPVTGLDAK
+```
+
+Modifications and flanking residues are ignored. Every listed peptide the
+prediction holds is kept.
 
 ## The FASTA: `--fasta`
 
 Used to assign peptides to proteins, to generate decoys, and as the source for
-Koina prediction. On a label-free or DIA run, supply the proteins potentially
+Koina prediction. A background has its own FASTA, `background_fasta`. On a
+label-free or DIA run, supply the proteins potentially
 present in your samples. If your SIL internal standards came as a kit, supply
 the vendor's own FASTA; see
 [below](#not-everything-in-your-library-and-your-fasta-is-an-analyte).
@@ -99,33 +138,25 @@ the vendor's own FASTA; see
 
 Your reference peptides: what you told the mass spectrometer to look for. The
 pipeline reads it to know what *should* have been found, and the list you gave
-the instrument usually works unedited:
+the instrument usually works unedited (A CSV or TSV whose first seven columns
+are these, in this order):
 
 ```csv
-Compound,m/z,z,RT Time (min)
-LGGNEQVTR,487.2567,2,23.41
-GAGSSEPVTGLDAK,644.8232,2,28.73
+Compound,Formula,Adduct,m/z,z,RT Time (min),Window (min)
+LGGNEQVTR,,(no adduct),487.2567,2,23.41,5
+GAGSSEPVTGLDAK,,(no adduct),644.8232,2,28.73,5
 ```
 
-CSV or TSV, detected from the header. Column names are matched
-case-insensitively from a set of aliases:
+`Formula` and `Adduct` may be empty. An eighth column, `isDecoy` (`true` or `false`),
+is optional: without decoys the pipeline makes its own. Further columns are ignored.
 
-| meaning | accepted names |
+Name the reference list in the samplesheet, or leave the column blank:
+
+| left blank | then |
 |---|---|
-| peptide | `Compound`, `Sequence`, `Peptide`, `PeptideSequence`, `ModifiedPeptideSequence` |
-| RT | `RT`, `RT Time (min)`, `Retention Time`, `NormalizedRetentionTime` |
-| charge | `z`, `Charge`, `PrecursorCharge` |
-| *m/z* | `m/z`, `mz`, `PrecursorMz` |
-| decoy flag | `isDecoy`, `decoy`, `is_decoy`, with `true`, `1`, `yes` or `decoy` meaning a decoy |
-
-An RT column is optional. On the OpenSWATH PRM route it enables the pipeline to
-derive RT anchors itself, without extra files, unless you supply a vendor `.blib`,
-which uses its own `IrtLibrary` instead.
-
-The decoy column is also optional. $q$ value and posterior error probability (PEP)
-estimates come from target-decoy competition. If your list has no decoys, the
-pipeline detects that and generates them for you. OpenSWATH takes its decoys from
-the `.pqp` instead.
+| your library is a vendor kit `.blib` | the list is taken from the library |
+| PRM runs with any other library | the pipeline cannot start |
+| DIA runs with any other library | the results list the peptides your runs detected |
 
 ## Known amounts: `--standard_amounts`
 
@@ -166,10 +197,10 @@ the amounts file.
 
 ## Not everything in your library and your FASTA is an analyte
 
-A vendor SIL kit supplies artificial, heavy-labelled standard proteins covering
-the peptides you want to quantify. The standard proteins share one extra stretch
-of sequence, an **iRT tag**, whose peptides give the run its RT scale in place of
-a separate iRT kit.
+A vendor SIL kit supplies heavy-labelled standards: recombinant fragments of
+the proteins you want to quantify, each covering a few of their peptides. Every
+standard carries the same tag, fused to it, which the kit calls the iRT tag:
+its peptides give the run its RT scale in place of a separate iRT kit.
 
 The library, FASTA and amounts file that come with the kit describe those
 standard proteins:
@@ -188,7 +219,8 @@ with no endogenous counterpart. Synthesizing a light twin would force the
 pipeline to extract a precursor the instrument never isolated, merely
 collecting whatever randomly co-elutes in its window.
 
-Name the iRT tag and the pipeline skips its peptides:
+Name the iRT tag and the pipeline skips its peptides: it gives them no light twin,
+and leaves them out of the results (only `quant.full.tsv` lists them):
 
 ```yaml
 complete_channels_skip_proteins:

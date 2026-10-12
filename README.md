@@ -91,7 +91,7 @@ module names in `run_slurm.sh`.
     when the pipeline can derive it (see below)
 
 * **Run files**, named in the samplesheet's `file` column. Either an open format
-  (`.mzML`, `.mzXML`) or a vendor format the pipeline converts for you: `.raw`
+  (`.mzML`; `.mzXML` with OpenSWATH only) or a vendor format the pipeline converts for you: `.raw`
   (Thermo), `.wiff` (SCIEX), `.d` (Bruker/Agilent), `.lcd` (Shimadzu). A `.wiff`
   is not a single file. Name only the `.wiff` and keep its paired `.wiff.scan`
   in the same directory, and the pipeline picks it up automatically.
@@ -101,7 +101,8 @@ module names in `run_slurm.sh`.
     a `.pqp`, transition `.tsv` or TraML
   - Gas-Phase Fractionation (GPF) runs, listed in a CSV as in
     [`templates/library_sheet.csv`](templates/library_sheet.csv), and the
-    pipeline builds a chromatogram library (`.elib`) from them
+    pipeline builds a chromatogram library (`.elib`) from them, searching them
+    with a `.dlib` you supply or one it predicts from your FASTA
   - nothing, and the pipeline predicts one from your FASTA
 
 * **Sequences in FASTA.** For label-free PRM and DIA runs, the proteins
@@ -109,8 +110,14 @@ module names in `run_slurm.sh`.
   sequences supplied with the vendor kit.
 
 * **A background**, if you need one (see [Reference and background
-  peptides](#reference-and-background-peptides)). Either a library (`.elib`,
-  `.blib` or `.dlib`) or a FASTA of background proteins.
+  peptides](#reference-and-background-peptides)), as any one of:
+  - a library you already have: `.elib`, `.dlib`, or `.blib` with a FASTA of
+    its proteins
+  - a few of your runs, listed in a CSV as in
+    [`templates/background_sheet.csv`](templates/background_sheet.csv), and a
+    FASTA of their proteins. The pipeline measures a background in the runs,
+    searching them with a library you supply or one it predicts from the FASTA
+  - a FASTA of the proteins in your samples, and the pipeline predicts one from it
 
 * **A reference list**, for PRM runs. Either name it in the samplesheet's
   `reference_list` column, or supply a vendor `.blib` and the pipeline derives
@@ -149,17 +156,19 @@ sbatch run_slurm.sh                            # or ./run_local.sh on a local ma
 ```
 results/
   quant/<route>/
-    quant.reference.tsv          one row per reference peptide per run: found or not, and how much
-    peptide.pairs.confident.tsv  light/heavy pairs and absolute pmol, SIL runs only
-    ...                          the full table, the confident subset, and a per-run summary
-  pipeline_info/                 logs, timings, software versions, the Nextflow report
-  ...                            intermediates from every step
+    quant_summary.tsv                how many reference peptides, or light/heavy pairs, each run detected
+    quant.reference.confident.tsv    reference peptides detected per run and their abundances
+    peptide.abs_quant.confident.tsv  light/heavy pairs and absolute pmol, SIL runs only
+    ...                              the full table, the confident subset, and the rest of the SIL tables
+  pipeline_info/                     logs, timings, software versions, the Nextflow report
+  ...                                intermediates from every step
 ```
 
 `<route>` names the engine and acquisition mode. For example, `enc_prm` is
 EncyclopeDIA on PRM runs.
 
-[OUTPUTS.md](OUTPUTS.md) describes every file and column.
+[OUTPUTS.md](OUTPUTS.md) says which file to read for your runs, and describes every
+file and column.
 
 ## Getting help
 

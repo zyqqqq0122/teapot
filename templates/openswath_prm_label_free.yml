@@ -48,7 +48,7 @@ context_seed_coefficients: encyclopedia
 fdr:               0.01
 run_diathem:       false     # OpenSWATH's own areas are the primary abundance here
 run_tric:          false     # cross-run alignment; wants many more than two runs
-primary_abundance: openswath
+primary_abundance: tric
 java_mem:          '32g'
 
 # cluster_options:     '-A <your-slurm-account>'
