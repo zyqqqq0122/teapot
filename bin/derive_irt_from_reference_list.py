@@ -113,26 +113,11 @@ def load_reference_list(path):
     return out
 
 
-def decode_peak_arrays(mz_blob, int_blob,
-                       compressed):
-    mz_bytes = mz_blob
-    int_bytes = int_blob
-    if compressed:
-        try:
-            mz_bytes = zlib.decompress(mz_bytes)
-            int_bytes = zlib.decompress(int_bytes)
-        except zlib.error:
-            pass
-    n = len(mz_bytes) // 8
-    mzs = list(struct.unpack(f"<{n}d", mz_bytes[: n * 8]))
-    n_int = len(int_bytes) // 4
-    ints = list(struct.unpack(f"<{n_int}f", int_bytes[: n_int * 4]))
-    if len(ints) != len(mzs):
-        n_int8 = len(int_blob) // 8
-        try:
-            ints = list(struct.unpack(f"<{n_int8}d", int_blob[: n_int8 * 8]))
-        except struct.error:
-            pass
+def decode_peak_arrays(mz_blob, int_blob):
+    mz_bytes = zlib.decompress(mz_blob)
+    int_bytes = zlib.decompress(int_blob)
+    mzs = list(struct.unpack(f">{len(mz_bytes) // 8}d", mz_bytes))
+    ints = list(struct.unpack(f">{len(int_bytes) // 4}f", int_bytes))
     return mzs, ints
 
 
@@ -234,7 +219,7 @@ def main():
             if preferred is None:
                 preferred = options[0]
             charge, precmz, mz_blob, int_blob = preferred
-            mzs, ints = decode_peak_arrays(mz_blob, int_blob, 1)
+            mzs, ints = decode_peak_arrays(mz_blob, int_blob)
             transitions = top_n(mzs, ints, args.top_transitions)
             if not transitions:
                 continue
