@@ -5,7 +5,8 @@ process DLIB_TO_OPENSWATH_TSV {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/prepare_library_openswath" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'dlib_to_openswath_tsv.versions.yml' : fn }
 
     input:
     path dlib

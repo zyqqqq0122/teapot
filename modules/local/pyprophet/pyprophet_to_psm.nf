@@ -5,7 +5,8 @@ process PYPROPHET_TO_PSM {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/pyprophet_prm/${meta.id}" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'pyprophet_to_psm.versions.yml' : fn }
 
     input:
     tuple val(meta), path(reference_list), path(export_tsv)

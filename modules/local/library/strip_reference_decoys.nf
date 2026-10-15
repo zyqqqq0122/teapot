@@ -5,7 +5,8 @@ process STRIP_REFERENCE_DECOYS {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/prepare_library" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'strip_reference_decoys.versions.yml' : fn }
 
     input:
     path reference_list

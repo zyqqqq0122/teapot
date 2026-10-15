@@ -5,7 +5,8 @@ process ASSERT_RT_COHERENT {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/merge_libraries" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'assert_rt_coherent.versions.yml' : fn }
 
     input:
     path union_dlib

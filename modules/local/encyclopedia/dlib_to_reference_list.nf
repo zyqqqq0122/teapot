@@ -5,7 +5,8 @@ process DLIB_TO_REFERENCE_LIST {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/prepare_library" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'dlib_to_reference_list.versions.yml' : fn }
 
     input:
     path library

@@ -5,7 +5,8 @@ process OPENSWATH_ASSAY_GENERATOR {
     container "${params.openswath_container}"
 
     publishDir path: { "${params.outdir}/prepare_library_openswath" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'openswath_assay_generator.versions.yml' : fn }
 
     input:
     path tsv

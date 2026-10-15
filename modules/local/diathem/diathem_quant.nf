@@ -5,7 +5,8 @@ process DIATHEM_QUANT {
     container "${params.diathem_container}"
 
     publishDir path: { "${params.outdir}/diathem_quant/${mode}" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'diathem_quant.versions.yml' : fn }
 
     input:
     val   mode

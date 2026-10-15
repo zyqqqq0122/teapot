@@ -5,7 +5,8 @@ process MERGE_LIBRARIES {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/merge_libraries" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'merge_libraries.versions.yml' : fn }
 
     input:
     path primary

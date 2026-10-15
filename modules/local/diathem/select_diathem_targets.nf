@@ -6,7 +6,8 @@ process SELECT_DIATHEM_TARGETS {
 
     publishDir path: { "${params.outdir}/diathem_quant/DIA" },
                mode: params.publish_mode,
-               saveAs: { fn -> fn.startsWith('prior/') || fn == 'rt_window.txt' ? null : fn }
+               saveAs: { fn -> fn.startsWith('prior/') || fn == 'rt_window.txt' ? null :
+                               fn == 'versions.yml' ? 'select_diathem_targets.versions.yml' : fn }
 
     input:
     path ids,     stageAs: 'ids/*'

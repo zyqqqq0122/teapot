@@ -5,7 +5,8 @@ process ASSERT_BACKGROUND_ADEQUATE {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/merge_libraries" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'assert_background_adequate.versions.yml' : fn }
 
     input:
     path union_dlib

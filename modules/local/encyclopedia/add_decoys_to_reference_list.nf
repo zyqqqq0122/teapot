@@ -3,7 +3,8 @@ process ADD_DECOYS_TO_REFERENCE_LIST {
     tag   "${reference_list.baseName}"
 
     publishDir path: { "${params.outdir}/prepare_library" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'add_decoys_to_reference_list.versions.yml' : fn }
 
     input:
     path reference_list
