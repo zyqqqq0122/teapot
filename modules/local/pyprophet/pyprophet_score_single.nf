@@ -5,7 +5,8 @@ process PYPROPHET_SCORE_SINGLE {
     container "${params.pyprophet_container}"
 
     publishDir path: { "${params.outdir}/pyprophet_prm/${meta.id}" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'pyprophet_score_single.versions.yml' : fn }
 
     input:
     tuple val(meta), path(osw)
@@ -38,7 +39,7 @@ process PYPROPHET_SCORE_SINGLE {
         --in=${meta.id}.scored.osw \\
         --out=${meta.id}.tsv \\
         --format=legacy_merged \\
-        --max_rs_peakgroup_qvalue=${params.fdr} \\
+        --max_rs_peakgroup_qvalue=1.0 \\
         ${Args.flat(params.pyprophet_export_args)} \\
         2>&1 | tee -a ${meta.id}.pyprophet.log
 
