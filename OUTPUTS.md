@@ -95,7 +95,7 @@ other.
 | `method` | the tool that measured the pair |
 | `status` | which forms have an abundance: `both_quantified`, `light_missing`, `heavy_missing` or `both_missing` |
 | `confident` | the pair is in `peptide.abs_quant.confident.tsv` |
-| `light_abundance`, `heavy_abundance` | the two forms' abundances |
+| `light_abundance`, `heavy_abundance` | the two forms' abundances. EncyclopeDIA's are summed over the same fragments in both forms, so they can be lower than the `abundance` in `quant.reference.tsv` |
 | `ratio_L_H`, `ratio_H_L` | light / heavy, and heavy / light |
 | `heavy_pmol_known` | the standard's amount, from `standard_amounts` |
 | `abs_pmol_light` | the endogenous peptide's amount: `ratio_L_H` × `heavy_pmol_known` |
@@ -119,7 +119,6 @@ The pipeline checks itself as it runs. If your run finished, the checks passed.
 |---|---|---|
 | `qc/<sample>/<sample>.<engine>.search_qc.tsv` | PRM routes | the search identified nothing, or every $q$ value came out 1 |
 | `qc/<engine>.quant_qc.tsv` | EncyclopeDIA routes | the quantification pass matched no fragment ions |
-| `openswath_feasibility/<sample>.openswath_feasibility.txt` | OpenSWATH PRM route | spectra too crowded for OpenSWATH to separate targets from decoys. |
 
 ## Other folders
 

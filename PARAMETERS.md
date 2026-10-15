@@ -90,9 +90,11 @@ The defaults suit an Orbitrap. For other instruments, set the fragment tolerance
 
 | your instrument | EncyclopeDIA | OpenSWATH | diathem |
 |---|---|---|---|
-| ion trap (Thermo Stellar, LTQ) | `-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD` | `-mz_extraction_window 0.4 -mz_extraction_window_unit Th` | `diathem_fragment_tol_th: 0.4` |
+| ion trap (Thermo Stellar, LTQ) | `-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD` | `-mz_extraction_window 0.8 -mz_extraction_window_unit Th` | `diathem_fragment_tol_th: 0.4` |
 | TOF (SCIEX TripleTOF) | `-ftol 20 -ftolunits PPM -frag CID` | `-mz_extraction_window 50 -mz_extraction_window_unit ppm -mz_extraction_window_ms1 20 -mz_extraction_window_ms1_unit ppm` | `diathem_fragment_ppm: 20` |
 | Orbitrap | the default | the default | the default |
+
+OpenSWATH's `-mz_extraction_window` is the full width of the window.
 
 Give every EncyclopeDIA search your run uses the same values. EncyclopeDIA's `-frag`
 chooses the fragment ions it uses (`HCD`: y ions; `CID`: b and y ions), not your
@@ -163,16 +165,7 @@ Leave `heavy_label` empty for label-free runs.
 ## 10. Acquisition checks
 
 Wide survey scans are left out of the runs in your samplesheet, and each peptide is
-measured only in its own isolation window; there is nothing to set. On the OpenSWATH
-PRM route the pipeline also checks that your spectra are not too crowded for OpenSWATH:
-
-| setting | default | |
-|---|---|---|
-| `openswath_occupancy_tolerance` | `0.4` | in **Th**. Match it to your extraction window |
-| `openswath_max_occupancy` | `0.35` | stop above this |
-| `openswath_occupancy_window_width` | `null` | which isolation width to check. `null`, the narrowest, is normally right |
-| `openswath_feasibility_warn_only` | `false` | report and continue instead of stopping |
-| `skip_openswath_feasibility` | `false` | skip the check |
+measured only in its own isolation window; there is nothing to set.
 
 ## 11. Quantification
 

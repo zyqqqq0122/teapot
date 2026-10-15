@@ -73,7 +73,10 @@ Otherwise: `snake_case` and no abbreviations (`openswath`, not `osw`), except in
 route labels and output paths. Tool-specific
 params are prefixed with the tool. Subworkflows are `<engine>_<mode>` or
 `prepare_<thing>[_<engine>]`; templates are `<engine>_<acquisition>[_<variant>]`.
-Most processes publish to `<outdir>/<process name in lowercase>`, some override it.
+
+Processes without a `publishDir` of their own do not publish `versions.yml`. Where several
+processes publish to one folder (`prepare_library/`, `quant/<route>/`, ...), each publishes it
+as `<process name in lowercase>.versions.yml`, else the last one would overwrite the others.
 
 Renaming a process means changing its file, its `include`, and its `withName`
 selectors in both configs. A stale selector raises no error: the process silently
@@ -149,7 +152,6 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 
 | module | does |
 |---|---|
-| `assert_openswath_feasible` | measures spectral occupancy before the OpenSWATH PRM search (§7) |
 | `openswath_assay_generator` | selects transitions; first stops on duplicated `transition_name` values |
 | `openswath_decoy_generator` | appends decoys and writes `library.pqp`; stops on an empty library |
 | `openswath_workflow` | the OpenSWATH search. On a run without MS1 scans it turns MS1 scoring off, which otherwise crashes OpenSwathWorkflow |
@@ -176,7 +178,7 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 
 `bin/` holds the longer Python bodies: `harmonize_rt.py`, `complete_channels.py`,
 `merge_libraries.py`, `assert_rt_coherent.py`, `emit_irt_library.py`,
-`derive_irt_from_reference_list.py`, `assert_openswath_feasible.py`,
+`derive_irt_from_reference_list.py`,
 `normalize_reference_mods.py`, `select_diathem_targets.py`, `remove_survey_scans.py`,
 `restrict_background.py`, `diathem_quant.py` (the precursor tolerance `DIATHEM_QUANT`
 passes diathem, §7). Shorter modules inline their Python in a heredoc.
@@ -462,7 +464,7 @@ OOM-killed with 16 GB. Put defaults in the generic scope instead.
 * a route with fewer runs than `quant_min_runs`, when `quant_require_min_runs` is
   set (otherwise a warning)
 
-## 7. Scan selection and the OpenSWATH feasibility gate
+## 7. Scan selection and OpenSWATH's fragment window
 
 Every route keeps to one rule: a peptide is scored and quantified only in scans
 acquired for targeted analysis, and a precursor that has an isolation window of its
@@ -533,7 +535,7 @@ survey or their targeted scans alone (§12).
   other targets' windows. Otherwise
   the default for the samplesheet `mode` applies (12.5 on DIA, 0.5 on PRM).
   `diathem_precursor_tol` overrides it; the value and the reason are in the diathem
-  log and `versions.yml`.
+  log and `diathem_quant.versions.yml`.
 
 **Retention time.** A target's own window is acquired only around its scheduled
 time, so own-window selection is itself the RT restriction on scheduled PRM. diathem
@@ -543,29 +545,23 @@ another gradient), and a window centred on it can cut the peak. Targets identifi
 DIA carry the RT the runs measured, and there diathem reads a window around it whose
 width the runs give (§3).
 
-**The OpenSWATH feasibility gate.** A decoy that keeps its target's precursor m/z
-is extracted from the same scans. It scores low only if its fragment m/z values land
-on noise. Spectral occupancy, the fraction of the m/z axis within the extraction
-tolerance of a real peak, is the chance a decoy transition hits signal, and it
-compounds over transitions. Those hits are fragments of the peptides isolated in
-that window, so they also co-elute and correlate, which is what OpenSWATH's
-chromatogram scores measure. OpenSWATH also scores the spectrum at each peak's apex
-(b and y ions, a dot product, mass error), but at tolerances of its own,
-`-Scoring:DIAScoring:dia_extraction_window` (default 0.05 Th) and
-`dia_byseries_ppm_diff` (10 ppm), which no template sets: on ion-trap data those
-scores are mostly zero, and set to the ion trap's tolerance they tell a standard
-from its own decoy only somewhat better. In crowded spectra decoys cannot be told apart
-from targets.
-
-`ASSERT_OPENSWATH_FEASIBLE` measures this on every run of the OpenSWATH PRM route,
-and `OPENSWATH_WORKFLOW` starts on a run once its check has passed (skip with
-`skip_openswath_feasibility`). It measures median occupancy at
-`openswath_occupancy_tolerance` over MS2 scans of the narrowest isolation width and
-stops above `openswath_max_occupancy` (0.35), or only reports with
-`openswath_feasibility_warn_only`. It measures across the acquisition, not inside
-one precursor's window, where the value follows that peptide's abundance. It does
-not run on OpenSWATH DIA: DIA windows tile the m/z range, and the threshold was
-calibrated on scheduled PRM.
+**OpenSWATH's fragment window.** OpenSWATH reads each transition within half of
+`-mz_extraction_window` around its m/z: the value is the window's full width
+(`ChromatogramExtractorAlgorithm`: from `mz - window / 2` to `mz + window / 2`), so the
+ion-trap templates' `0.4 Th` reads +/-0.2 Th, half EncyclopeDIA's `-ftol 0.4 AMU`.
+Ion-trap fragment m/z can be off by more than that. On the SIL QC runs they read high,
+by more at high m/z and by different amounts from plate to plate, so the strongest
+library fragments fall outside the window: their traces hold noise, OpenSWATH's
+library-intensity and co-elution scores fail on a present standard as on its decoy,
+and almost nothing passes 1 %. A well-calibrated run given the same error fails the same
+way, and a window twice as wide recovers it. A wider window costs detections on a
+well-calibrated run, so the window has to follow the runs: it is set in
+`openswath_search_args`, and nothing checks it, since measuring the error needs
+identified peptides first and a threshold that depends on the engine and the
+instrument. OpenSWATH also scores the spectrum at each peak's apex (b and y ions, a dot
+product, mass error) at tolerances of its own, `-Scoring:DIAScoring:dia_extraction_window`
+(default 0.05 Th) and `dia_byseries_ppm_diff` (10 ppm), which no template sets; set to
+the ion trap's tolerance those scores did not help the label-free search.
 
 ## 8. Quantification decisions
 
@@ -631,6 +627,24 @@ calibrated on scheduled PRM.
   minimum, and `LibraryFile` writes no `peptidequants` row. On the plasma SIL
   cohort these are peptides whose vendor library spectrum holds only a few
   fragments, detected or not.
+* **An EncyclopeDIA light/heavy ratio sums the same fragments in both forms.** The
+  export picks each library entry's quant ions on its own (`getArchetypals` keys them
+  by `PeptideModSeq`, one set for every run), so a light peptide and its standard are
+  often summed over different fragments, and their two `TotalIntensity` values then
+  compare unlike sums. `MERGE_QUANT_ENCYCLOPEDIA_*` read each `peptidequants` row's
+  `QuantIonMassArray` and `QuantIonIntensityArray` and label every quant ion:
+  EncyclopeDIA writes the theoretical m/z of the ion it annotated, so the label is the
+  b, y, c, z or z+1 ion, at the charges `FragmentationModel` annotates, within
+  0.005 Th. Where both forms of a precursor have an abundance in a run, each is summed
+  over the ions whose label the other form shares, as
+  `abundance_encyclopedia_shared_ions`; a form whose ions are all shared keeps its
+  `TotalIntensity`. One m/z can be two ions at once (a b and a y ion of equal mass), so
+  ions match when their label sets overlap; the label shifts the two ions differently
+  in the other form, which breaks the tie. `QUANTIFY_HEAVY_LIGHT` pairs on this column
+  and `FINALIZE_QUANT` counts a pair in `pairs_quantified` only when both sums are
+  above zero, so the two agree: a form with nothing on the shared ions is unquantified
+  in its pair. One shared ion is enough. The per-form tables keep `TotalIntensity`,
+  every quant ion of the form, since a form's own abundance needs no partner.
 * **Reporting tables (`FINALIZE_QUANT`).** One status: `detected` is
   `q_value <= fdr`. The reference set is the reference list's (peptide, channel)
   pairs, or without a list every pair detected in at least one sample, so a DIA
@@ -847,24 +861,23 @@ end to end.
   with MS1 scoring on (`-enable_ms1 true`, in the default and template search
   arguments) crashes in the extraction. `OPENSWATH_WORKFLOW` turns it off for a run
   without MS1 scans.
-* **OpenSWATH does not certify SIL standards on crowded PRM**, with pyprophet or
-  Context-MS. It finds most standards where EncyclopeDIA does, yet almost no target
-  passes 1 %. A shuffled decoy made with `-switchKR false` (with the default `true`,
-  heavy standards get none) keeps its target's precursor m/z, so it is read from
-  the same few scans, and OpenSWATH's scores rank a standard above its own decoy
-  little more often than chance: its co-elution and shape scores not at all, its
-  library-intensity and spectrum scores only somewhat. EncyclopeDIA differs twice.
-  Its main score, a spectrum match to the library multiplied by how well the
-  fragments' traces co-elute, ranks almost every standard above its own decoy. And
-  it scores each library entry together with its own decoy and passes on only the
-  better one (`TDCPeptideScoringResult`), so a decoy that loses to its standard
-  never reaches Context or Percolator, while OpenSWATH passes every decoy on. The
-  same competition applied to OpenSWATH's scores does not rescue it. So the engines
-  do not differ as chromatograms against spectra: both read both. A comparison of
-  the two engines' feature tables must account for the competition, which has
-  already removed the hardest decoys from EncyclopeDIA's. RT calibration is not the
-  obstacle: a scheduled acquisition reads each assay only around its expected time
-  anyway.
+* **OpenSWATH on the SIL plasma runs.** With the templates' fragment window it
+  certified almost no standard, with pyprophet or Context-MS, where EncyclopeDIA
+  certifies most. The runs' fragment m/z calibration is the cause (§7): the strongest
+  fragments fall outside OpenSWATH's window, and its scores then rank a present
+  standard above its own decoy little more often than chance. Read at +/-0.4 Th, with a
+  linear RT calibration (lowess bends on the ten iRT-tag peptides) and pyprophet, it
+  certifies most of the standards EncyclopeDIA does, and entrapment holds its 1 %.
+  Context-MS's mProphet engine learns a wrong discriminant from the SIL background. Its
+  Percolator engine works, but counts decoys for its q-values, and
+  OpenSwathDecoyGenerator gives most heavy standards none: with `-switchKR true` it
+  skips a peptide whose C-terminal residue is modified, and with `false` it drops a
+  heavy standard's decoy as a duplicate of its light twin's. Decoys generated for each
+  channel separately restore the count. EncyclopeDIA also scores each library entry
+  together with its own decoy and passes on only the better one
+  (`TDCPeptideScoringResult`), so a comparison of the two engines' feature tables must
+  account for that competition, which has already removed the hardest decoys from
+  EncyclopeDIA's.
 * **EncyclopeDIA's `-frag` names ion series, not the activation.**
   `FragmentationType`: `CID` is "CID/HCD (B/Y)", the default, and `HCD` is "HCD
   (Y-Only)". It also decides what a decoy moves (`LibraryEntry.getDecoy`: under `HCD`
@@ -993,21 +1006,25 @@ end to end.
   added. Reruns of the same input gave the same background, so the spread shows
   only when the input changes. Choose the FASTA by what may be in the sample
   (INPUTS.md).
+* **Light and heavy summed over different fragments.** A kit peptide's ratio disagreed
+  with Skyline's. The `analysis` export had chosen each form's quant ions separately: a
+  weak light's best-tracing fragments are not its standard's, and the library's
+  strongest fragments could be in one sum only, which moved some ratios several-fold
+  from a sum over the same fragments. A ratio now sums the fragments both forms share
+  (§8).
 
 ## 13. Deferred: inferring engine and settings from the data
 
 Not built on purpose at this stage. Part of it exists, under the rules below:
-`REMOVE_SURVEY_SCANS` finds survey windows, `DIATHEM_QUANT` measures whether the
-targets have windows of their own (§7), and `ASSERT_OPENSWATH_FEASIBLE` answers
-"can OpenSWATH work here?". A value the user set wins, every decision is recorded
-(`isolation_windows/`, diathem's log and `versions.yml`), and when the targets have
+`REMOVE_SURVEY_SCANS` finds survey windows, and `DIATHEM_QUANT` measures whether the
+targets have windows of their own (§7). A value the user set wins, every decision is recorded
+(`isolation_windows/`, diathem's log and `diathem_quant.versions.yml`), and when the targets have
 no windows of their own diathem keeps the defaults.
 
 | decision | evidence | effort |
 |---|---|---|
 | fragment tolerance by instrument class | mzML instrument metadata, scan filter strings (`ITMS`/`FTMS`) | easy |
 | PRM or DIA | whether the targets have windows of their own | done for diathem's tolerance (§7) |
-| OpenSWATH or EncyclopeDIA | occupancy | implemented |
 | heavy/light labeling | paired peptidoforms in the library | moderate |
 | reachable fraction of the reference list | library and reference list, stripped sequences | easy |
 | `context` or `pyprophet` on OpenSWATH PRM | whether a usable background exists | moderate |
