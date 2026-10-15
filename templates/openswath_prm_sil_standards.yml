@@ -1,22 +1,13 @@
 # OpenSWATH, targeted PRM with SIL internal standards. Absolute quant.
 #   abs_pmol_light = (light / heavy) * known heavy pmol
-# Works on sparse acquisitions.
 
 input:  <path/to/samplesheet.csv>
 fasta:  <path/to/proteins.fasta>
 outdir: results
 
 # --- Library ------------------------------------------------------------------
-# A vendor .blib of the heavy standards, converted to OpenSWATH's .pqp by the
-# pipeline. The light channel is synthesised, so the blib may be heavy-only.
 openswath_blib:    <path/to/vendor_standards.blib>
 background_source: none
-
-# --- Feasibility gate ---------------------------------------------------------
-# Match the tolerance to -mz_extraction_window below.
-openswath_occupancy_tolerance:   0.4
-openswath_max_occupancy:         0.35
-openswath_feasibility_warn_only: false
 
 # --- Heavy/light pairing ------------------------------------------------------
 heavy_label:
@@ -44,21 +35,20 @@ min_consistency:  0.0
 pair_rt_tolerance_seconds: 9
 
 # --- Extraction ---------------------------------------------------------------
-openswath_assaygen_args: '-min_transitions 6 -max_transitions 10'
-openswath_decoygen_args: ''
+openswath_assaygen_args: '-min_transitions 5 -max_transitions 10'
+openswath_decoygen_args: '-switchKR false -min_decoy_fraction 0.6'
 openswath_search_args: >
   -force
-  -mz_extraction_window 0.4 -mz_extraction_window_unit Th
-  -irt_mz_extraction_window 0.4 -irt_mz_extraction_window_unit Th
+  -mz_extraction_window 0.8 -mz_extraction_window_unit Th
+  -irt_mz_extraction_window 0.8 -irt_mz_extraction_window_unit Th
   -mz_extraction_window_ms1 0.4 -mz_extraction_window_ms1_unit Th
   -mz_correction_function none
   -enable_ms1 true
   -rt_extraction_window 600
-  -RTNormalization:estimateBestPeptides
-  -RTNormalization:alignmentMethod lowess
+  -RTNormalization:alignmentMethod linear
   -RTNormalization:NrRTBins 5
   -RTNormalization:MinBinsFilled 3
-  -min_rsq 0.90
+  -min_rsq 0.85
   -min_coverage 0.1
   -Library:override_group_label_check
   -Scoring:stop_report_after_feature 5
@@ -67,9 +57,8 @@ openswath_search_args: >
   -tempDirectory .
 
 # --- FDR ----------------------------------------------------------------------
-# 'pyprophet' scores target vs decoy inside the search and needs no background,
-# which suits a standards-only library.
 openswath_prm_fdr: pyprophet
+pyprophet_learn_args: '--classifier=XGBoost --xeval_num_iter=3 --ss_initial_fdr=0.05 --ss_iteration_fdr=0.01 --pi0_lambda 0 0 0'
 
 fdr:               0.01
 primary_abundance: openswath

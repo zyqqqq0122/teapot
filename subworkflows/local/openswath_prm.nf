@@ -1,4 +1,3 @@
-include { ASSERT_OPENSWATH_FEASIBLE   } from '../../modules/local/openms/assert_openswath_feasible'
 include { OPENSWATH_WORKFLOW          } from '../../modules/local/openms/openswath_workflow'
 include { SPLIT_OPENSWATH_FEATURES    } from '../../modules/local/context_ms/split_openswath_features'
 include { AUGMENT_CONTEXT_FEATURES    } from '../../modules/local/diathem/augment_context_features'
@@ -35,14 +34,7 @@ workflow OPENSWATH_PRM {
         .collectFile(name: 'sample_map.osw_prm.tsv', newLine: true, sort: true)
         .first()
 
-    def checked = samples
-    if (!params.skip_openswath_feasibility) {
-        ASSERT_OPENSWATH_FEASIBLE(samples.map { meta, mzml, _rl -> tuple(meta, mzml) })
-        checked = samples.join(ASSERT_OPENSWATH_FEASIBLE.out.report)
-                         .map { meta, mzml, rl, _report -> tuple(meta, mzml, rl) }
-    }
-
-    OPENSWATH_WORKFLOW(checked, library, irt_library, full_window_flag, true)
+    OPENSWATH_WORKFLOW(samples, library, irt_library, full_window_flag, true)
 
     def diathem_tsv_ch
     if (diathem_ok) {
