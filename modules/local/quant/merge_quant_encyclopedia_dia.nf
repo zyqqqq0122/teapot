@@ -38,7 +38,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
     """
 
     python3 - <<'PY' > merge_quant.log 2>&1
-    import pandas as pd, glob, os, re, json, sys
+    import pandas as pd, numpy as np, glob, os, re, json, sys, functools, zlib
 
     PEP_TSV    = "${peptides_tsv}"
     ELIB       = "${elib}"
@@ -107,6 +107,79 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
                 return r['sample_id']
         return stem
 
+    SHARED = 'abundance_encyclopedia_shared_ions'
+    PROTON, H_ATOM, WATER, NH3 = 1.00727646681290, 1.00782503207, 18.0105646837, 17.0265491
+    AA_MASS = {'A': 71.037114, 'R': 156.101111, 'N': 114.042927, 'D': 115.026943,
+               'C': 103.009185, 'E': 129.042593, 'Q': 128.058578, 'G': 57.021464,
+               'H': 137.058912, 'I': 113.084064, 'L': 113.084064, 'K': 128.094963,
+               'M': 131.040485, 'F': 147.068414, 'P': 97.052764, 'S': 87.032028,
+               'T': 101.047679, 'W': 186.079313, 'Y': 163.063329, 'V': 99.068414,
+               'U': 150.953636, 'O': 237.147727}
+    ION_TOL = 0.005
+    _res_re = re.compile(r'\\[([+-]?\\d+(?:\\.\\d*)?)\\]|([A-Z])')
+
+    @functools.lru_cache(maxsize=None)
+    def fragment_ions(modseq, charge):
+        res, nterm = [], 0.0
+        for mod, aa in _res_re.findall(modseq):
+            if aa:
+                if aa not in AA_MASS: return (), np.empty(0)
+                res.append(AA_MASS[aa] + nterm); nterm = 0.0
+            elif res: res[-1] += float(mod)
+            else: nterm += float(mod)
+        names, mzs, n = [], [], len(res)
+        b, y = PROTON, WATER + PROTON
+        for i in range(1, n + 1):
+            b += res[i - 1]; y += res[n - i]
+            for t, m in (('b', b), ('y', y), ('c', b + NH3), ('z', y - NH3),
+                         ('z+1', y - NH3 + H_ATOM)):
+                for z in range(1, max(1, min(charge - 1, 4)) + 1):
+                    names.append((t, i, z)); mzs.append((m + (z - 1) * PROTON) / z)
+        return tuple(names), np.array(mzs)
+
+    def ion_labels(modseq, charge, mzs):
+        names, theo = fragment_ions(modseq, charge)
+        return [{names[k] for k in np.flatnonzero(np.abs(theo - m) <= ION_TOL)} for m in mzs]
+
+    def shared_ion_abundance(top, keys):
+        # top: the peptidequants row of each sample, peptide, channel and charge
+        val = pd.Series(float('nan'), index=top.index)
+        rows = {}
+        for r in top.itertuples():
+            rows.setdefault((r.sample_id, r.stripped_seq, r.charge), {})[r.channel] = r
+        n_shared, same, unlabelled, no_ions = [], 0, 0, 0
+        for ch in rows.values():
+            l, h = ch.get('light'), ch.get('heavy')
+            if l is None or h is None or not (l.abundance_encyclopedia > 0 and
+                                               h.abundance_encyclopedia > 0):
+                continue
+            if l.QuantIonIntensityArray is None or h.QuantIonIntensityArray is None:
+                no_ions += 1
+                continue
+            ions = [(np.frombuffer(zlib.decompress(r.QuantIonMassArray), '>f8'),
+                     np.frombuffer(zlib.decompress(r.QuantIonIntensityArray), '>f4'))
+                    for r in (l, h)]
+            ll, hl = [ion_labels(r.PeptideModSeq, int(r.charge), mz)
+                      for r, (mz, _it) in zip((l, h), ions)]
+            unlabelled += sum(not s for s in ll + hl)
+            li, hi = [], []
+            for i, a in enumerate(ll):
+                j = next((j for j, b in enumerate(hl) if j not in hi and a & b), None)
+                if j is not None:
+                    li.append(i); hi.append(j)
+            for r, (mz, it), idx in zip((l, h), ions, (li, hi)):
+                val[r.Index] = (r.abundance_encyclopedia if len(idx) == len(mz)
+                                else float(it[idx].astype(float).sum()))
+            n_shared.append(len(li))
+            same += len(li) == len(ions[0][0]) == len(ions[1][0])
+        n = pd.Series(n_shared, dtype=int)
+        print(f"light/heavy pairs both quantified: {len(n)}, each form summed over the quant ions "
+              f"both share (ions shared: pairs) {n.value_counts().sort_index().to_dict()}; "
+              f"same ions in both forms: {same}; none shared: {int((n == 0).sum())}; quant ions "
+              f"without a b/y/c/z label: {unlabelled}; pairs without ion intensities: {no_ions}",
+              file=sys.stderr)
+        return top[keys].assign(**{SHARED: val})
+
     quant_rows = []
     _elib_ok = os.path.exists(ELIB) and os.path.getsize(ELIB)
     if not _elib_ok and os.path.basename(PEP_TSV) != 'NO_FILE' and os.path.getsize(PEP_TSV):
@@ -129,7 +202,8 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         con = sqlite3.connect(ELIB)
         try:
             pq = pd.read_sql_query("SELECT PeptideModSeq, PrecursorCharge, SourceFile, "
-                                   "TotalIntensity, RTInSecondsCenter FROM peptidequants", con)
+                                   "TotalIntensity, RTInSecondsCenter, QuantIonMassArray, "
+                                   "QuantIonIntensityArray FROM peptidequants", con)
             try:
                 p2p = pd.read_sql_query("SELECT PeptideSeq, ProteinAccession FROM "
                                         "peptidetoprotein WHERE isDecoy = 0", con)
@@ -150,15 +224,17 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             enc_fb = (pq.groupby(keys, as_index=False)
                         .agg(abundance_encyclopedia=('abundance_encyclopedia','max'),
                              peptidoform=('peptidoform','first')))
-            top = pq.loc[pq.groupby(keys)['abundance_encyclopedia'].idxmax(),
-                         keys + ['RTInSecondsCenter']]
-            enc_fb = enc_fb.merge(top.rename(columns={'RTInSecondsCenter': 'rt_encyclopedia_seconds'}),
+            top = pq.loc[pq.groupby(keys)['abundance_encyclopedia'].idxmax()]
+            enc_fb = enc_fb.merge(top[keys + ['RTInSecondsCenter']]
+                                  .rename(columns={'RTInSecondsCenter': 'rt_encyclopedia_seconds'}),
                                   on=keys, how='left')
+            if HAS_HEAVY:
+                enc_fb = enc_fb.merge(shared_ion_abundance(top, keys), on=keys, how='left')
             enc_fb['protein'] = (enc_fb['stripped_seq'].map(pep2prot).fillna('')
                                  .apply(dedupe_accessions))
             quant_rows.append(enc_fb[['sample_id','peptidoform','stripped_seq','charge',
                                       'channel','protein','abundance_encyclopedia',
-                                      'rt_encyclopedia_seconds']])
+                                      'rt_encyclopedia_seconds'] + ([SHARED] if HAS_HEAVY else [])])
             print(f"abundance read from {ELIB} peptidequants: {len(enc_fb)} rows "
                   f"(charge-resolved)", file=sys.stderr)
 
@@ -259,7 +335,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         base['calibrated'] = False
 
     cols = ['sample_id','peptide','peptidoform','charge','channel','protein',
-            'abundance_openswath','abundance_encyclopedia','abundance_diathem',
+            'abundance_openswath','abundance_encyclopedia',SHARED,'abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
             'rt_encyclopedia_seconds','rt_diathem_seconds',

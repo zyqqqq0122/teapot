@@ -5,7 +5,8 @@ process QUANTIFY_HEAVY_LIGHT {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/quant/${route}" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'quantify_heavy_light.versions.yml' : fn }
 
     input:
     path  base_long
@@ -161,6 +162,11 @@ process QUANTIFY_HEAVY_LIGHT {
         sub = rows[[*key, 'channel', 'protein', col, 'consistency', 'id_qvalue']].copy()
         sub['rt'] = pd.to_numeric(rows[rt_col(method)], errors='coerce')
         sub[col] = pd.to_numeric(sub[col], errors='coerce')
+        if f'{col}_shared_ions' in rows.columns:
+            shared = pd.to_numeric(rows[f'{col}_shared_ions'], errors='coerce')
+            sub[col] = shared.where(shared.notna(), sub[col])
+            print(f"{method}: where both forms are quantified ({int(shared.notna().sum())} rows), "
+                  f"each is summed over the quant ions light and heavy share", file=sys.stderr)
         if MIN_CONS > 0.0:
             sub.loc[pd.to_numeric(sub['consistency'], errors='coerce') < MIN_CONS, col] = pd.NA
         agg = lambda pre: dict(**{f'{pre}_abundance': (col, lambda s: s.sum(min_count=1)),

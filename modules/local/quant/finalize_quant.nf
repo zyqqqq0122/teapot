@@ -5,7 +5,8 @@ process FINALIZE_QUANT {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/quant/${route}" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn == 'versions.yml' ? 'finalize_quant.versions.yml' : fn }
 
     input:
     path  base_long
@@ -50,6 +51,7 @@ process FINALIZE_QUANT {
     REF     = refs[0] if refs else None
     FASTA   = "${fasta}"
     TOOLS   = ['encyclopedia', 'openswath', 'diathem', 'tric']
+    SHARED  = 'abundance_%s_shared_ions' % PRIMARY
 
     def sniff(path):
         with open(path) as f:
@@ -185,6 +187,7 @@ process FINALIZE_QUANT {
             o[c] = r.get(c) or ''
         o['is_decoy'] = 'true' if dec else 'false'
         o['_best'] = best_peak_group(r)
+        o['_shared'] = r.get(SHARED) or ''
         out.append(o)
 
     if not targets:
@@ -261,9 +264,9 @@ process FINALIZE_QUANT {
         det = {}
         for o in reference:
             if o['sample_id'] == sid and o['detected'] == 'true' and o['peptide'] in peptides:
-                d = det.setdefault((o['peptide'], o['charge'], o['channel']), [False, None])
+                d = det.setdefault((o['peptide'], o['charge'], o['channel']), [False, None, None])
                 if not d[0] and num(o.get('abundance')) not in (None, 0.0):
-                    d[0], d[1] = True, num(o.get(RTQ))
+                    d[0], d[1], d[2] = True, num(o.get(RTQ)), num(o.get('_shared'))
         return det
 
     def co_elute(det, p, z):
@@ -285,7 +288,8 @@ process FINALIZE_QUANT {
                     counts += [len({p for p, _z, c in det if c == ch}),
                                len({p for (p, _z, c), q in det.items() if c == ch and q[0]})]
                 quant = [(p, z) for p, z in pairs
-                         if det[(p, z, 'light')][0] and det[(p, z, 'heavy')][0]]
+                         if det[(p, z, 'light')][0] and det[(p, z, 'heavy')][0]
+                         and 0.0 not in (det[(p, z, 'light')][2], det[(p, z, 'heavy')][2])]
                 n_apart += sum(not co_elute(det, p, z) for p, z in quant)
                 w.writerow([ROUTE, sid, len(paired)] + counts +
                            [len({p for p, _z in pairs}),
