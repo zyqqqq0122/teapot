@@ -203,7 +203,7 @@ for that when the correction is off.
 
 | setting | default | |
 |---|---|---|
-| `primary_abundance` | `encyclopedia` | the tool whose abundance fills `abundance` and gives the amounts. It has to run on your data: `encyclopedia` or `openswath` with that engine, `tric` on OpenSWATH DIA runs with `run_tric: true`, `diathem` with `run_diathem: true`, `standard_peak` on SIL runs of the EncyclopeDIA routes: each light peptide and its heavy standard measured by the pipeline over the standard's peak, with the fragments both share, as you would in Skyline (the SIL template sets it) |
+| `primary_abundance` | `encyclopedia` | the tool whose abundance fills `abundance` and gives the amounts. It has to run on your data: `encyclopedia` or `openswath` with that engine, `tric` on OpenSWATH DIA runs with `run_tric: true`, `diathem` with `run_diathem: true`, `standard_peak` on SIL runs of the EncyclopeDIA routes: each light peptide and its heavy standard measured by the pipeline over the standard's peak, with the fragments both share (the SIL template sets it) |
 | `run_diathem` | `true` | run diathem interference-corrected quantification |
 | `run_tric` | `false` | align features across runs. OpenSWATH DIA only |
 | `tric_args` | `--method LocalMST --realign_method lowess_cython --max_rt_diff 60 --mst:useRTCorrection True --mst:Stdev_multiplier 3.0 --fdr_cutoff 0.01 --max_fdr_quality 0.05` | TRIC options. Setting it replaces the whole default |

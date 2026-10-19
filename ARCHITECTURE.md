@@ -860,10 +860,11 @@ own iRT step).
 * **SIL pairs measured over the standard's peak** (`standard_peak`, EncyclopeDIA routes, SIL
   runs with a reference list). The exports sum each form from the 5 quant ions they chose
   for it and integrate each form where their cross-run alignment puts it, light and heavy
-  as separate precursors. `QUANTIFY_STANDARD_PEAK`
-  (`quantify_standard_peak.py`, per run, after the search, reading the search's peptide
-  table) does that for every pair whose heavy the search identified (q <= `fdr`) and whose
-  precursors have windows of their own. The heavy's fragment traces are each averaged over
+  as separate precursors. `QUANTIFY_STANDARD_PEAK` (`quantify_standard_peak.py`, per run,
+  after the search, reading the search's peptide table) instead lets the standard decide
+  the peak and integrates both forms' same fragments over the same boundaries, for every
+  pair whose heavy the search identified (q <= `fdr`) and whose precursors have windows of
+  their own. The heavy's fragment traces are each averaged over
   3 scans and summed; the apex starts at the scan nearest the search's apex of the heavy and
   moves to the higher neighbour of that sum at most 3 times, so it may lie a few seconds
   outside the apex window; the boundaries are where the sum falls below a tenth of the apex
