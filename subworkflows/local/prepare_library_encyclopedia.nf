@@ -23,6 +23,8 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
     no_file
 
     main:
+    def warn_ch = Channel.empty()
+    def note = { log_ch, step -> warn_ch = warn_ch.mix(log_ch.flatMap { Warnings.inLog(it, step) }) }
     def need_dlib   = params.library_sheet || !params.elib
     def run_channel = (heavy_label as List)?.size() > 0
     def has_bg      = background_source && background_source != 'none'
@@ -39,6 +41,7 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
             def source_blib_ch
             if (run_channel) {
                 COMPLETE_CHANNELS(blib_ch, heavy_label)
+                note(COMPLETE_CHANNELS.out.log, 'complete_channels')
                 source_blib_ch = COMPLETE_CHANNELS.out.library
             } else {
                 source_blib_ch = blib_ch
@@ -61,15 +64,18 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
                     anchors_ch = Channel.value(file(params.irt_anchors))
                 } else {
                     EMIT_IRT_LIBRARY(blib_ch, heavy_label)
+                    note(EMIT_IRT_LIBRARY.out.log, 'emit_irt_library')
                     anchors_ch = EMIT_IRT_LIBRARY.out.anchors
                 }
                 HARMONIZE_RT_TARGET(BLIB_TO_DLIB.out.dlib, anchors_ch,
                                     'target', false, false)
+                note(HARMONIZE_RT_TARGET.out.log, 'harmonize_rt (library)')
 
                 PREPARE_BACKGROUND(background_source, background_library, background_fasta)
                 HARMONIZE_RT_BACKGROUND(PREPARE_BACKGROUND.out.dlib,
                                         anchors_ch, 'background',
                                         false, false)
+                note(HARMONIZE_RT_BACKGROUND.out.log, 'harmonize_rt (background)')
 
                 MERGE_LIBRARIES(HARMONIZE_RT_TARGET.out.library,
                               HARMONIZE_RT_BACKGROUND.out.library)
@@ -86,6 +92,7 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
             def source_dlib_ch
             if (run_channel) {
                 COMPLETE_CHANNELS(KOINA_PREDICT.out.dlib, heavy_label)
+                note(COMPLETE_CHANNELS.out.log, 'complete_channels')
                 source_dlib_ch = COMPLETE_CHANNELS.out.library
             } else {
                 source_dlib_ch = KOINA_PREDICT.out.dlib
@@ -113,4 +120,5 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
     emit:
     library                 = library_ch
     reference_list_derived  = reference_list_ch
+    warnings                = warn_ch
 }

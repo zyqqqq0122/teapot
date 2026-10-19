@@ -12,6 +12,7 @@ include { MSCONVERT                    } from './modules/local/msconvert/msconve
 include { REMOVE_SURVEY_SCANS          } from './modules/local/runs/remove_survey_scans'
 include { ADD_DECOYS_TO_REFERENCE_LIST } from './modules/local/encyclopedia/add_decoys_to_reference_list'
 include { NORMALIZE_REFERENCE_MODS     } from './modules/local/library/normalize_reference_mods'
+include { CHECK_REFERENCE_COVERAGE     } from './modules/local/library/check_reference_coverage'
 
 
 def helpMessage() {
@@ -26,10 +27,10 @@ def helpMessage() {
 
     The samplesheet (--input) is a CSV with one row per run and the header
     sample_id,file,mode,reference_list,engine:
-      sample_id       your name for the run
+      sample_id       your name for the run, a different one on every row
       file            the run: .mzML, .mzXML (engine openswath only), .dia (engine
                       encyclopedia only), or a vendor file the pipeline converts:
-                      .raw, .wiff, .wiff2, .d, .lcd
+                      .raw, .wiff, .wiff2, .d, .lcd. Each with a name of its own
       mode            PRM or DIA
       reference_list  your reference peptides, in the isolation-list layout Skyline
                       exports, the same file for every run of an engine and mode.
@@ -52,8 +53,9 @@ def helpMessage() {
                             standard, by peptide or by protein
       --pair_rt_tolerance_seconds
                             SIL runs: a light/heavy pair whose two peaks lie further
-                            apart than this many seconds does not count (default 9;
-                            0 = off)
+                            apart than this many seconds does not count. auto (the
+                            default): half the median peak width of your heavy
+                            standards; 0 = off
       --min_consistency     SIL runs: leave out of the amounts every measurement
                             whose diathem consistency is below this (default 0: none)
 
@@ -101,6 +103,26 @@ workflow {
     }
 
     def rows = file(params.input).splitCsv(header: true)
+    def bad_mode = rows.findAll { !(it.mode?.toUpperCase() in ['PRM', 'DIA']) }
+    if (bad_mode) {
+        error "Pre-flight: samplesheet mode must be PRM or DIA, found " +
+              bad_mode.collect { "'${it.mode}' (${it.sample_id})" }.join(', ')
+    }
+    def bad_id = rows.findAll { !(it.sample_id ==~ /[A-Za-z0-9._+-]+/) }
+    if (bad_id) {
+        error "Pre-flight: a sample_id may hold letters, digits and . _ + - only, found " +
+              bad_id.collect { "'${it.sample_id}'" }.join(', ')
+    }
+    def repeated = { names -> names.countBy { it }.findAll { _k, n -> n > 1 }.keySet() }
+    def dup_id = repeated(rows.collect { it.sample_id })
+    if (dup_id) {
+        error "Pre-flight: every samplesheet row needs a sample_id of its own, repeated: ${dup_id.join(', ')}"
+    }
+    def dup_run = repeated(rows.collect { file(it.file).getBaseName() })
+    if (dup_run) {
+        error "Pre-flight: run files must differ in name, whatever their folder or extension, " +
+              "repeated: ${dup_run.join(', ')}. Rename or link them under distinct names."
+    }
     def ref_of = { r -> r.reference_list?.trim() ?: '' }
     def sig  = { r -> [ (r.engine?.trim() ?: 'encyclopedia').toLowerCase(),
                         r.mode.toUpperCase() ] }
@@ -156,6 +178,10 @@ workflow {
         if (!(params[it].toString().toLowerCase() ==~ /.*\.(elib|dlib|blib)$/)) {
             error "Pre-flight: ${it} must be an .elib, .dlib or .blib, got: ${params[it]}"
         }
+    }
+    def tol = params.pair_rt_tolerance_seconds as String
+    if (!(tol == 'auto' || (tol.isNumber() && (tol as double) >= 0))) {
+        error "pair_rt_tolerance_seconds must be auto or a number of seconds (0 = off), got '${tol}'."
     }
     if (!((params.background_peptides_top as String).isInteger() && (params.background_peptides_top as int) > 0)) {
         error "background_peptides_top must be a positive whole number, got '${params.background_peptides_top}'."
@@ -488,6 +514,7 @@ workflow {
     def enc_dia_sample_rl = _enc_dia_ref ? file(_enc_dia_ref) : null
 
     def enc_labels = has_enc ? (params.heavy_label ?: []) : []
+    def warning_chs = []
 
     if (has_enc) {
         def enc_dia_has_reference_list =
@@ -496,6 +523,7 @@ workflow {
         PREPARE_LIBRARY_ENCYCLOPEDIA(fasta, enc_labels, bg_source,
                         params.background_library, params.background_fasta,
                         params.background_min_targets, no_file)
+        warning_chs << PREPARE_LIBRARY_ENCYCLOPEDIA.out.warnings
 
         if (has_enc_prm) {
             def enc_prm_samples
@@ -504,6 +532,8 @@ workflow {
                 NORMALIZE_REFERENCE_MODS(Channel.value(enc_prm_sample_rl),
                                          PREPARE_LIBRARY_ENCYCLOPEDIA.out.library)
                 def enc_prm_rl = NORMALIZE_REFERENCE_MODS.out.reference_list
+                CHECK_REFERENCE_COVERAGE(enc_prm_rl, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, 'enc_prm')
+                warning_chs << CHECK_REFERENCE_COVERAGE.out.warnings.flatMap { Warnings.inFile(it, 'enc_prm') }
                 if (params.add_decoys_to_reference_list &&
                     !reference_list_has_decoys(enc_prm_sample_rl)) {
                     log.warn "encyclopedia+PRM: the supplied reference_list " +
@@ -535,6 +565,7 @@ workflow {
             ENCYCLOPEDIA_PRM(enc_prm_samples, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                          diathem_lib_ch, standard_amts_ch, params.heavy_label,
                          enc_prm_targets, no_file, diathem_ok_enc_prm)
+            warning_chs << ENCYCLOPEDIA_PRM.out.warnings
         }
 
         if (has_enc_dia) {
@@ -548,6 +579,7 @@ workflow {
                          diathem_lib_ch, standard_amts_ch, params.heavy_label,
                          enc_dia_targets, enc_dia_has_reference_list, no_file,
                          diathem_ok_enc_dia)
+            warning_chs << ENCYCLOPEDIA_DIA.out.warnings
         }
     }
 
@@ -563,6 +595,7 @@ workflow {
                             params.background_library, params.background_fasta,
                             params.background_min_targets,
                             openswath_reflist_for_anchors, no_file)
+        warning_chs << PREPARE_LIBRARY_OPENSWATH.out.warnings
 
         if (has_osw_prm) {
             def openswath_prm_row = rows.find {
@@ -597,6 +630,7 @@ workflow {
                                    diathem_lib_ch, standard_amts_ch,
                                    params.heavy_label,
                                    openswath_prm_targets, no_file, diathem_ok_osw_prm, fasta)
+            warning_chs << OPENSWATH_PRM.out.warnings
         }
         if (has_osw_dia) {
             OPENSWATH_DIA(by_route.osw_dia,
@@ -607,6 +641,13 @@ workflow {
                                    diathem_lib_ch, standard_amts_ch,
                                    params.heavy_label,
                                    no_file, diathem_ok_osw_dia, fasta)
+            warning_chs << OPENSWATH_DIA.out.warnings
         }
+    }
+
+    if (warning_chs) {
+        def warnings = Channel.empty().mix(*warning_chs)
+        warnings.subscribe { log.warn it }
+        warnings.collectFile(name: 'warnings.txt', storeDir: params.outdir, newLine: true, sort: true)
     }
 }

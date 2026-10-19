@@ -27,6 +27,8 @@ workflow PREPARE_LIBRARY_OPENSWATH {
     no_file
 
     main:
+    def warn_ch = Channel.empty()
+    def note = { log_ch, step -> warn_ch = warn_ch.mix(log_ch.flatMap { Warnings.inLog(it, step) }) }
     def unimod_ch     = Channel.value(file("${projectDir}/assets/unimod_delta_masses.tsv"))
     def no_file_ch    = Channel.value(no_file)
     def run_channel   = (heavy_label as List)?.size() > 0
@@ -75,6 +77,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                 }
             } else {
                 EMIT_IRT_LIBRARY(blib_ch, heavy_label)
+                note(EMIT_IRT_LIBRARY.out.log, 'emit_irt_library')
                 anchors_ch     = EMIT_IRT_LIBRARY.out.anchors
                 irt_library_ch = EMIT_IRT_LIBRARY.out.osw_tsv
             }
@@ -82,6 +85,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
             def source_blib_ch
             if (run_channel) {
                 COMPLETE_CHANNELS(blib_ch, heavy_label)
+                note(COMPLETE_CHANNELS.out.log, 'complete_channels')
                 source_blib_ch = COMPLETE_CHANNELS.out.library
             } else {
                 source_blib_ch = blib_ch
@@ -93,6 +97,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
 
             HARMONIZE_RT_TARGET(BLIB_TO_DLIB.out.dlib, anchors_ch, 'target',
                                 false, false)
+            note(HARMONIZE_RT_TARGET.out.log, 'harmonize_rt (library)')
 
             def dlib_ch
             if (has_bg) {
@@ -100,6 +105,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                 HARMONIZE_RT_BACKGROUND(PREPARE_BACKGROUND.out.dlib,
                                         anchors_ch, 'background',
                                         false, false)
+                note(HARMONIZE_RT_BACKGROUND.out.log, 'harmonize_rt (background)')
 
                 MERGE_LIBRARIES(HARMONIZE_RT_TARGET.out.library,
                               HARMONIZE_RT_BACKGROUND.out.library)
@@ -197,6 +203,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
             def source_dlib_ch
             if (run_channel) {
                 COMPLETE_CHANNELS(src_lib_ch, heavy_label)
+                note(COMPLETE_CHANNELS.out.log, 'complete_channels')
                 source_dlib_ch = COMPLETE_CHANNELS.out.library
             } else {
                 source_dlib_ch = src_lib_ch
@@ -210,6 +217,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                                     'target', false, false)
             } else if (has_ref_anchors) {
                 DERIVE_IRT_FROM_REFERENCE_LIST(reference_list_for_anchors, src_lib_ch)
+                note(DERIVE_IRT_FROM_REFERENCE_LIST.out.log, 'derive_irt_from_reference_list')
                 anchors2_ch    = DERIVE_IRT_FROM_REFERENCE_LIST.out.anchors
                 irt_library_ch = DERIVE_IRT_FROM_REFERENCE_LIST.out.osw_tsv
                 HARMONIZE_RT_TARGET(source_dlib_ch, anchors2_ch,
@@ -218,6 +226,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                 HARMONIZE_RT_TARGET(source_dlib_ch, no_file_ch, 'target',
                                     true, true)
             }
+            note(HARMONIZE_RT_TARGET.out.log, 'harmonize_rt (library)')
 
             def dlib2_ch
             if (has_bg) {
@@ -225,6 +234,7 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                 HARMONIZE_RT_BACKGROUND(PREPARE_BACKGROUND.out.dlib,
                                         anchors2_ch, 'background',
                                         false, false)
+                note(HARMONIZE_RT_BACKGROUND.out.log, 'harmonize_rt (background)')
                 MERGE_LIBRARIES(HARMONIZE_RT_TARGET.out.library,
                               HARMONIZE_RT_BACKGROUND.out.library)
                 dlib2_ch = MERGE_LIBRARIES.out.dlib
@@ -263,4 +273,5 @@ workflow PREPARE_LIBRARY_OPENSWATH {
     irt_library             = irt_library_ch
     full_window_flag        = full_window_ch
     spectral_library        = spectral_lib_ch
+    warnings                = warn_ch
 }
