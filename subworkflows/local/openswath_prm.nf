@@ -10,6 +10,7 @@ include { DIATHEM_QUANT               } from '../../modules/local/diathem/diathe
 include { DLIB_TO_REFERENCE_LIST      } from '../../modules/local/encyclopedia/dlib_to_reference_list'
 include { STRIP_REFERENCE_DECOYS      } from '../../modules/local/library/strip_reference_decoys'
 include { MERGE_QUANT_OPENSWATH_PRM   } from '../../modules/local/quant/merge_quant_openswath_prm'
+include { DERIVE_PAIR_RT_TOLERANCE    } from '../../modules/local/quant/derive_pair_rt_tolerance'
 include { FINALIZE_QUANT              } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT           } from '../../modules/local/quant/quantify_heavy_light'
 
@@ -99,17 +100,28 @@ workflow OPENSWATH_PRM {
                         heavy_label, params.primary_abundance)
 
 
-    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_PRM.out.long, targets_prm, fasta, heavy_label, 'osw_prm')
+    def tolerance_ch = Channel.value(no_file)
+    if ((heavy_label as List)?.size() > 0) {
+        DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_OPENSWATH_PRM.out.long, 'osw_prm')
+        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_prm') }
+        tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
+    }
+    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_PRM.out.long, targets_prm, fasta, heavy_label, tolerance_ch, 'osw_prm')
+    def warn_ch = FINALIZE_QUANT.out.warnings
+        .flatMap { Warnings.inFile(it, 'osw_prm') }
 
     def do_abs = (heavy_label as List)?.size() > 0 &&
                  standard_amounts.name != 'NO_FILE'
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_OPENSWATH_PRM.out.long, standard_amounts, fasta,
-                          heavy_label, params.primary_abundance,
+                          heavy_label, tolerance_ch, params.primary_abundance,
                           params.min_consistency, 'osw_prm')
+        warn_ch = warn_ch.mix(QUANTIFY_HEAVY_LIGHT.out.warnings
+                                    .flatMap { Warnings.inFile(it, 'osw_prm') })
     }
 
     emit:
     base_long       = MERGE_QUANT_OPENSWATH_PRM.out.long
     base_per_sample = MERGE_QUANT_OPENSWATH_PRM.out.per_sample
+    warnings        = warn_ch
 }

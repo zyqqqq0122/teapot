@@ -6,13 +6,15 @@ process FINALIZE_QUANT {
 
     publishDir path: { "${params.outdir}/quant/${route}" },
                mode: params.publish_mode,
-               saveAs: { fn -> fn == 'versions.yml' ? 'finalize_quant.versions.yml' : fn }
+               saveAs: { fn -> fn == 'versions.yml' ? 'finalize_quant.versions.yml' :
+                               fn.endsWith('.warnings.txt') ? null : fn }
 
     input:
     path  base_long
     path  reference_list, stageAs: 'ref/*'
     path  fasta,          stageAs: 'fasta/*'
     val   heavy_label
+    path  tolerance,      stageAs: 'tolerance/*'
     val   route
 
     output:
@@ -21,6 +23,7 @@ process FINALIZE_QUANT {
     path "quant.reference.tsv",           emit: reference
     path "quant_summary.tsv",             emit: summary
     path "finalize_quant.log",            emit: log
+    path "finalize_quant.warnings.txt",   emit: warnings
     path "versions.yml",                  emit: versions
 
     script:
@@ -46,7 +49,11 @@ process FINALIZE_QUANT {
     PRIMARY = "${params.primary_abundance}"
     LABEL   = json.loads(r'''${label_json}''')
     MTOL    = float("${mod_tol}")
-    TOL     = float("${params.pair_rt_tolerance_seconds ?: 0}")
+    TOLS    = [p for p in glob.glob('tolerance/*') if os.path.basename(p) != 'NO_FILE']
+    TOL     = (float(list(csv.DictReader(open(TOLS[0]), delimiter='\\t'))[0]['tolerance_seconds'])
+               if TOLS else 0.0)
+    MIN_IDS = int("${params.search_min_reference_ids}")
+    warnings = []
     refs    = [p for p in glob.glob('ref/*') if os.path.basename(p) != 'NO_FILE']
     REF     = refs[0] if refs else None
     FASTA   = "${fasta}"
@@ -260,10 +267,15 @@ process FINALIZE_QUANT {
     RTQ = 'rt_%s_seconds' % PRIMARY
     if not has(RTQ):
         RTQ = 'rt_apex_seconds'
+    by_sample = {}
+    for o in reference:
+        if o['detected'] == 'true':
+            by_sample.setdefault(o['sample_id'], []).append(o)
+
     def detected_in(sid, peptides):
         det = {}
-        for o in reference:
-            if o['sample_id'] == sid and o['detected'] == 'true' and o['peptide'] in peptides:
+        for o in by_sample.get(sid, ()):
+            if o['peptide'] in peptides:
                 d = det.setdefault((o['peptide'], o['charge'], o['channel']), [False, None, None])
                 if not d[0] and num(o.get('abundance')) not in (None, 0.0):
                     d[0], d[1], d[2] = True, num(o.get(RTQ)), num(o.get('_shared'))
@@ -273,7 +285,7 @@ process FINALIZE_QUANT {
         a, b = det[(p, z, 'light')][1], det[(p, z, 'heavy')][1]
         return TOL <= 0 or a is None or b is None or abs(a - b) <= TOL
 
-    n_apart = 0
+    n_apart, n_ids = 0, []
     with open('quant_summary.tsv', 'w', newline='') as f:
         w = csv.writer(f, delimiter='\\t', lineterminator='\\n')
         if paired:
@@ -291,6 +303,7 @@ process FINALIZE_QUANT {
                          if det[(p, z, 'light')][0] and det[(p, z, 'heavy')][0]
                          and 0.0 not in (det[(p, z, 'light')][2], det[(p, z, 'heavy')][2])]
                 n_apart += sum(not co_elute(det, p, z) for p, z in quant)
+                n_ids.append((sid, counts[0] + counts[2]))
                 w.writerow([ROUTE, sid, len(paired)] + counts +
                            [len({p for p, _z in pairs}),
                             len({p for p, z in quant if co_elute(det, p, z)})])
@@ -300,6 +313,7 @@ process FINALIZE_QUANT {
                 det = detected_in(sid, {p for p, _c in targets})
                 hit = {(p, c) for p, _z, c in det}
                 quant = {(p, c) for (p, _z, c), q in det.items() if q[0]}
+                n_ids.append((sid, len(hit)))
                 w.writerow([ROUTE, sid, len(targets), len(hit), len(quant)])
 
     if paired:
@@ -312,8 +326,16 @@ process FINALIZE_QUANT {
     for line in open('quant_summary.tsv'):
         print("  " + line.rstrip(), file=sys.stderr)
     if not confident:
-        print("WARNING: FINALIZE_QUANT [%s]: no reference peptide was detected at q <= %g. "
-              "The tables are still written; check the search." % (ROUTE, FDR), file=sys.stderr)
+        warnings.append("no reference peptide was detected at q <= %g in any run; the tables are "
+                        "still written. Check the search settings for your instrument." % FDR)
+    else:
+        warnings += ["run %s: %d reference peptides detected at q <= %g, fewer than "
+                     "search_min_reference_ids (%d)" % (sid, n, FDR, MIN_IDS)
+                     for sid, n in n_ids if n < MIN_IDS]
+    for line in warnings:
+        print("WARNING: " + line, file=sys.stderr)
+    with open('finalize_quant.warnings.txt', 'w') as f:
+        f.writelines(line + '\\n' for line in warnings)
     PY
 
     cat <<-EOF > versions.yml
@@ -327,7 +349,7 @@ process FINALIZE_QUANT {
     stub:
     """
     for f in quant.full.tsv quant.reference.confident.tsv quant.reference.tsv quant_summary.tsv; do touch \$f; done
-    touch finalize_quant.log
+    touch finalize_quant.log finalize_quant.warnings.txt
     echo '"${task.process}": {python: stub}' > versions.yml
     """
 }

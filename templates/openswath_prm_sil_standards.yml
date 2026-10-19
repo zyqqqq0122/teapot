@@ -30,9 +30,7 @@ rt_harmonize_min_anchor_coverage: 0.8
 # --- Absolute amounts ---------------------------------------------------------
 standard_amounts: <path/to/standard_amounts.csv>
 min_consistency:  0.0
-# A light and its heavy standard elute together: a pair whose two peaks lie
-# further apart than this gets no amount.
-pair_rt_tolerance_seconds: 9
+pair_rt_tolerance_seconds: auto
 
 # --- Extraction ---------------------------------------------------------------
 openswath_assaygen_args: '-min_transitions 5 -max_transitions 10'

@@ -5,7 +5,8 @@ process ASSERT_QUANT_PRODUCTIVE {
     container "${params.python_container}"
 
     publishDir path: { "${params.outdir}/qc" },
-               mode: params.publish_mode
+               mode: params.publish_mode,
+               saveAs: { fn -> fn.endsWith('.warnings.txt') ? null : fn }
 
     input:
     path  analysis_elib
@@ -13,6 +14,7 @@ process ASSERT_QUANT_PRODUCTIVE {
 
     output:
     path "${engine}.quant_qc.tsv", emit: qc
+    path "${engine}.quant_qc.warnings.txt", emit: warnings
     path "versions.yml",           emit: versions
 
     script:
@@ -70,13 +72,15 @@ process ASSERT_QUANT_PRODUCTIVE {
             "sheet_search_args for this run, e.g. '-ftol 0.4 -ftolunits AMU "
             "-lftol 0.4 -lftolunits AMU -frag HCD'." % (ENGINE, total))
 
+    warnings = []
     if frac > MAX_ZERO:
-        print("WARNING: ASSERT_QUANT_PRODUCTIVE [%s]: %d of %d peptides (%.0f%%) have "
-              "NumberOfQuantIons=0 and therefore zero abundance, above the %.0f%% "
-              "threshold (quant_max_zero_ion_fraction). Some are legitimately absent "
-              "from this run, but check the 'inherited search args' line in the "
-              "libexport log before trusting the abundances."
-              % (ENGINE, zero_ions, total, 100 * frac, 100 * MAX_ZERO), file=sys.stderr)
+        warnings.append("%d of %d peptide measurements (%.0f%%) matched no fragment ion and "
+                        "have zero abundance, more than quant_max_zero_ion_fraction (%.0f%%). "
+                        "Check that the search settings suit your instrument."
+                        % (zero_ions, total, 100 * frac, 100 * MAX_ZERO))
+        print("WARNING: ASSERT_QUANT_PRODUCTIVE [%s]: %s" % (ENGINE, warnings[-1]), file=sys.stderr)
+    with open("${engine}.quant_qc.warnings.txt", "w") as f:
+        f.writelines(line + "\\n" for line in warnings)
 
     if runs < MIN_RUNS:
         print("WARNING: ASSERT_QUANT_PRODUCTIVE [%s]: quantification is based on %d "
@@ -95,6 +99,7 @@ process ASSERT_QUANT_PRODUCTIVE {
 
     stub:
     """
+    touch ${engine}.quant_qc.warnings.txt
     echo -e "engine\\tpeptidequant_rows\\tsource_files\\tzero_quant_ions\\tzero_intensity\\tzero_ion_fraction\\tmean_quant_ions" > ${engine}.quant_qc.tsv
     echo '"${task.process}": {python: stub}' > versions.yml
     """

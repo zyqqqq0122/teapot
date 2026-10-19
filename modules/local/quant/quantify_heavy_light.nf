@@ -6,13 +6,15 @@ process QUANTIFY_HEAVY_LIGHT {
 
     publishDir path: { "${params.outdir}/quant/${route}" },
                mode: params.publish_mode,
-               saveAs: { fn -> fn == 'versions.yml' ? 'quantify_heavy_light.versions.yml' : fn }
+               saveAs: { fn -> fn == 'versions.yml' ? 'quantify_heavy_light.versions.yml' :
+                               fn.endsWith('.warnings.txt') ? null : fn }
 
     input:
     path  base_long
     path  standard_amounts
     path  fasta, stageAs: 'fasta/*'
     val   heavy_label
+    path  tolerance
     val   primary
     val   min_consistency
     val   route
@@ -23,6 +25,7 @@ process QUANTIFY_HEAVY_LIGHT {
     path "peptide.abs_quant.matrix.tsv",    emit: peptide_matrix
     path "protein.abs_quant.tsv",           emit: protein
     path "quantify_heavy_light.log",        emit: log
+    path "quantify_heavy_light.warnings.txt", emit: warnings
     path "versions.yml",                    emit: versions
 
     script:
@@ -31,7 +34,7 @@ process QUANTIFY_HEAVY_LIGHT {
     """
 
     python3 - <<'PY' > quantify_heavy_light.log 2>&1
-    import pandas as pd, re, sys, json
+    import pandas as pd, re, sys, json, csv
 
     BASE      = "${base_long}"
     STD       = "${standard_amounts}"
@@ -41,7 +44,8 @@ process QUANTIFY_HEAVY_LIGHT {
     MIN_CONS  = float("${min_consistency}")
     FDR       = float("${params.fdr}")
     SKIP_PROT = json.loads(r'''${skip_json}''')
-    TOL       = float("${params.pair_rt_tolerance_seconds ?: 0}")
+    TOL       = float(list(csv.DictReader(open('${tolerance}'),
+                                        delimiter='\\t'))[0]['tolerance_seconds'])
 
     heavy_accs = { r["unimod"] for r in LABEL }
     if not heavy_accs:
@@ -319,10 +323,15 @@ process QUANTIFY_HEAVY_LIGHT {
               file=sys.stderr)
     print(f"confident pairs: {len(conf)}, {len(amounts)} of them with a known amount "
           f"(matrix and protein amounts)", file=sys.stderr)
+    warnings = []
     if conf.empty:
-        print(f"WARNING: no pair of '{PRIMARY}' has both channels detected at one time, so the "
-              f"confident table, matrix and protein amounts are empty; "
-              f"peptide.abs_quant.tsv has every tool's pairs.", file=sys.stderr)
+        warnings.append(f"no light/heavy pair of '{PRIMARY}' is confident, so the confident "
+                        f"table, matrix and protein amounts are empty; peptide.abs_quant.tsv "
+                        f"has every tool's pairs.")
+    for line in warnings:
+        print("WARNING: " + line, file=sys.stderr)
+    with open('quantify_heavy_light.warnings.txt', 'w') as f:
+        f.writelines(line + '\\n' for line in warnings)
     PY
 
     cat <<-EOF > versions.yml
@@ -337,7 +346,7 @@ process QUANTIFY_HEAVY_LIGHT {
     stub:
     """
     touch peptide.abs_quant.tsv peptide.abs_quant.confident.tsv peptide.abs_quant.matrix.tsv \\
-          protein.abs_quant.tsv quantify_heavy_light.log
+          protein.abs_quant.tsv quantify_heavy_light.log quantify_heavy_light.warnings.txt
     echo '"${task.process}": {python: stub}' > versions.yml
     """
 }

@@ -35,12 +35,9 @@ rt_harmonize_min_r2:              0.98
 rt_harmonize_min_anchor_coverage: 0.8
 
 # --- Absolute amounts ---------------------------------------------------------
-# TSV/CSV mapping peptide -> known heavy pmol.
 standard_amounts: <path/to/standard_amounts.csv>
-min_consistency:  0.0        # LOD gate on diathem-based absolute quant
-# A light and its heavy standard elute together: a pair whose two peaks lie
-# further apart than this gets no amount.
-pair_rt_tolerance_seconds: 9
+min_consistency:  0.0
+pair_rt_tolerance_seconds: auto
 
 # --- Instrument (ion trap) -------------------
 # -frag HCD: EncyclopeDIA uses y ions only (-frag CID: b and y), whatever the

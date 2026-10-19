@@ -7,6 +7,7 @@ include { PYPROPHET_EXPORT          } from '../../modules/local/pyprophet/pyprop
 include { DIATHEM_QUANT             } from '../../modules/local/diathem/diathem_quant'
 include { SELECT_DIATHEM_TARGETS    } from '../../modules/local/diathem/select_diathem_targets'
 include { MERGE_QUANT_OPENSWATH_DIA } from '../../modules/local/quant/merge_quant_openswath_dia'
+include { DERIVE_PAIR_RT_TOLERANCE  } from '../../modules/local/quant/derive_pair_rt_tolerance'
 include { FINALIZE_QUANT            } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT         } from '../../modules/local/quant/quantify_heavy_light'
 include { TRIC_FEATURE_ALIGNMENT    } from '../../modules/local/tric/tric_feature_alignment'
@@ -74,17 +75,28 @@ workflow OPENSWATH_DIA {
                         heavy_label, params.primary_abundance)
 
 
-    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, fasta, heavy_label, 'osw_dia')
+    def tolerance_ch = Channel.value(no_file)
+    if ((heavy_label as List)?.size() > 0) {
+        DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_OPENSWATH_DIA.out.long, 'osw_dia')
+        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_dia') }
+        tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
+    }
+    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, fasta, heavy_label, tolerance_ch, 'osw_dia')
+    def warn_ch = FINALIZE_QUANT.out.warnings
+        .flatMap { Warnings.inFile(it, 'osw_dia') }
 
     def do_abs = (heavy_label as List)?.size() > 0 &&
                  standard_amounts.name != 'NO_FILE'
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_OPENSWATH_DIA.out.long, standard_amounts, fasta,
-                          heavy_label, params.primary_abundance,
+                          heavy_label, tolerance_ch, params.primary_abundance,
                           params.min_consistency, 'osw_dia')
+        warn_ch = warn_ch.mix(QUANTIFY_HEAVY_LIGHT.out.warnings
+                                    .flatMap { Warnings.inFile(it, 'osw_dia') })
     }
 
     emit:
     base_long       = MERGE_QUANT_OPENSWATH_DIA.out.long
     base_per_sample = MERGE_QUANT_OPENSWATH_DIA.out.per_sample
+    warnings        = warn_ch
 }

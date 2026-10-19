@@ -5,6 +5,7 @@ include { DIATHEM_QUANT                } from '../../modules/local/diathem/diath
 include { SELECT_DIATHEM_TARGETS       } from '../../modules/local/diathem/select_diathem_targets'
 include { STRIP_REFERENCE_DECOYS      } from '../../modules/local/library/strip_reference_decoys'
 include { MERGE_QUANT_ENCYCLOPEDIA_DIA } from '../../modules/local/quant/merge_quant_encyclopedia_dia'
+include { DERIVE_PAIR_RT_TOLERANCE     } from '../../modules/local/quant/derive_pair_rt_tolerance'
 include { FINALIZE_QUANT               } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT            } from '../../modules/local/quant/quantify_heavy_light'
 
@@ -84,14 +85,25 @@ workflow ENCYCLOPEDIA_DIA {
                         heavy_label, params.primary_abundance)
 
 
-    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, reference_list, fasta, heavy_label, 'enc_dia')
+    def tolerance_ch = Channel.value(no_file)
+    if ((heavy_label as List)?.size() > 0) {
+        DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, 'enc_dia')
+        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'enc_dia') }
+        tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
+    }
+    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, reference_list, fasta, heavy_label, tolerance_ch, 'enc_dia')
+    def warn_ch = ASSERT_QUANT_PRODUCTIVE.out.warnings
+        .mix(FINALIZE_QUANT.out.warnings)
+        .flatMap { Warnings.inFile(it, 'enc_dia') }
 
     def do_abs = (heavy_label as List)?.size() > 0 &&
                  standard_amounts.name != 'NO_FILE'
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, standard_amounts, fasta,
-                          heavy_label, params.primary_abundance,
+                          heavy_label, tolerance_ch, params.primary_abundance,
                           params.min_consistency, 'enc_dia')
+        warn_ch = warn_ch.mix(QUANTIFY_HEAVY_LIGHT.out.warnings
+                                    .flatMap { Warnings.inFile(it, 'enc_dia') })
     }
 
     emit:
@@ -101,4 +113,5 @@ workflow ENCYCLOPEDIA_DIA {
     elib            = SEARCH_DIA.out.elib
     base_long       = MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long
     base_per_sample = MERGE_QUANT_ENCYCLOPEDIA_DIA.out.per_sample
+    warnings        = warn_ch
 }

@@ -6,6 +6,7 @@ include { ASSERT_QUANT_PRODUCTIVE      } from '../../modules/local/quant/assert_
 include { DIATHEM_QUANT                } from '../../modules/local/diathem/diathem_quant'
 include { STRIP_REFERENCE_DECOYS      } from '../../modules/local/library/strip_reference_decoys'
 include { MERGE_QUANT_ENCYCLOPEDIA_PRM } from '../../modules/local/quant/merge_quant_encyclopedia_prm'
+include { DERIVE_PAIR_RT_TOLERANCE     } from '../../modules/local/quant/derive_pair_rt_tolerance'
 include { FINALIZE_QUANT               } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT            } from '../../modules/local/quant/quantify_heavy_light'
 
@@ -76,14 +77,25 @@ workflow ENCYCLOPEDIA_PRM {
                         ENCYCLOPEDIA_LIBEXPORT.out.elib)
 
 
-    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, targets_prm, fasta, heavy_label, 'enc_prm')
+    def tolerance_ch = Channel.value(no_file)
+    if ((heavy_label as List)?.size() > 0) {
+        DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, 'enc_prm')
+        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'enc_prm') }
+        tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
+    }
+    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, targets_prm, fasta, heavy_label, tolerance_ch, 'enc_prm')
+    def warn_ch = ASSERT_QUANT_PRODUCTIVE.out.warnings
+        .mix(FINALIZE_QUANT.out.warnings)
+        .flatMap { Warnings.inFile(it, 'enc_prm') }
 
     def do_abs = (heavy_label as List)?.size() > 0 &&
                  standard_amounts.name != 'NO_FILE'
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, standard_amounts, fasta,
-                          heavy_label, params.primary_abundance,
+                          heavy_label, tolerance_ch, params.primary_abundance,
                           params.min_consistency, 'enc_prm')
+        warn_ch = warn_ch.mix(QUANTIFY_HEAVY_LIGHT.out.warnings
+                                    .flatMap { Warnings.inFile(it, 'enc_prm') })
     }
 
     emit:
@@ -94,4 +106,5 @@ workflow ENCYCLOPEDIA_PRM {
     plots              = CONTEXT_SEARCH.out.plots
     base_long          = MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long
     base_per_sample    = MERGE_QUANT_ENCYCLOPEDIA_PRM.out.per_sample
+    warnings           = warn_ch
 }
