@@ -111,14 +111,21 @@ not listed.
 
 ---
 
-## Checks
+## Checks and warnings
 
-The pipeline checks itself as it runs. If your run finished, the checks passed.
+The pipeline checks itself as it runs. A problem it cannot work around stops the run.
+Anything else you should look at is printed as a warning while the pipeline runs and
+collected in `warnings.txt`, which is written only when there is a warning: for
+example a run that detected fewer than `search_min_reference_ids` reference peptides,
+or reference peptides your library does not hold.
 
-| file | route | what it catches |
+| file | route | what it holds |
 |---|---|---|
-| `qc/<sample>/<sample>.<engine>.search_qc.tsv` | PRM routes | the search identified nothing, or every $q$ value came out 1 |
-| `qc/<engine>.quant_qc.tsv` | EncyclopeDIA routes | the quantification pass matched no fragment ions |
+| `warnings.txt` | all | every warning of the run |
+| `qc/<sample>/<sample>.<engine>.search_qc.tsv` | PRM routes | each run's identifications. The run stops when a report is empty or every $q$ value came out 1 |
+| `qc/encyclopedia_prm.quant_qc.tsv`, `qc/encyclopedia_dia.quant_qc.tsv` | EncyclopeDIA routes | how many measurements matched no fragment ion. The run stops when none matched any |
+| `qc/enc_prm.reference_coverage.tsv` | EncyclopeDIA PRM, with your own reference list | each reference peptide and charge, and whether your library holds it (`in_library`), holds it only at another charge or only with other modifications, or does not hold it. A peptide your library does not hold cannot be detected |
+| `quant/<route>/pair_rt_tolerance.tsv` | SIL runs | the `pair_rt_tolerance_seconds` used, and how `auto` arrived at it |
 
 ## Other folders
 

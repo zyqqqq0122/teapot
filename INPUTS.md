@@ -16,7 +16,7 @@ sample_B,/data/sample_B.raw,PRM,/data/reference.csv,encyclopedia
 
 | column | what it is |
 |---|---|
-| `sample_id` | your name for the run |
+| `sample_id` | your name for the run, a different one on every row. Letters, digits and `.` `_` `+` `-` only |
 | `file` | one acquisition. See run files below |
 | `mode` | `PRM` or `DIA` |
 | `reference_list` | your reference peptides: the same file on every row of an engine and mode, or blank on all of them. See the reference list below |

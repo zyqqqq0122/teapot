@@ -136,14 +136,14 @@ Leave `heavy_label` empty for label-free runs.
 |---|---|---|
 | `heavy_label` | `[]` | the heavy labels, e.g. `[{site: K, unimod: 'UniMod:259'}, {site: R, unimod: 'UniMod:267'}]`. `site` is a residue, `n_term` or `c_term` |
 | `standard_amounts` | `null` | the known pmol of your SIL internal standards ([INPUTS.md](INPUTS.md#known-amounts---standard_amounts)) |
-| `pair_rt_tolerance_seconds` | `9` | a light peptide and its standard elute together: a pair gets an amount only when its two peaks lie within this many seconds. About half your peaks' width at the base; `0` turns the check off |
+| `pair_rt_tolerance_seconds` | `auto` | a light peptide and its standard elute together: a pair gets an amount only when its two peaks lie within this many seconds. `auto` takes half the typical width of your heavy standards' peaks in these runs; give a number of seconds to set it yourself, or `0` to turn the check off |
 | `complete_channels_skip_proteins` | `[]` | proteins that exist only as heavy, such as `['iRT_Tag']`: their peptides give no amount |
 | `min_consistency` | `0.0` | leave out measurements whose diathem `consistency` is lower |
-| `complete_channels_ion_types` | `['b','y']` | fragment ions of the light or heavy forms the pipeline adds to your library. Add `c`, `z` for ETD / EThcD |
+| `complete_channels_ion_types` | `['b','y']` | fragment ions of the light or heavy forms the pipeline adds to your library. Only `b` and `y` are supported |
 | `complete_channels_max_frag_charge` | `2` | highest fragment charge of those forms |
 | `complete_channels_tolerance_ppm` | `20.0` | tolerance for matching the library's fragment peaks to their ions |
-| `complete_channels_coverage_hard_floor` | `0.5` | stop if fewer than this fraction of peptides got their other form |
-| `complete_channels_coverage_warn_below` | `0.9` | warn below this |
+| `complete_channels_coverage_hard_floor` | `0.5` | stop the run if any one spectrum in your library has less than this share of its signal in `b` and `y` ions: its other form could not be made reliably |
+| `complete_channels_coverage_warn_below` | `0.9` | a spectrum below this still gets its other form, made from its `b` and `y` ions only, and is marked in `complete_channels/complete_channels_qc.tsv` |
 
 ## 9. Confidence estimation
 
@@ -152,7 +152,7 @@ Leave `heavy_label` empty for label-free runs.
 | `fdr` | `0.01` | the $q$ value threshold: a peptide is detected at or below it |
 | `openswath_prm_fdr` | `context` | OpenSWATH PRM: `context` (needs a background) or `pyprophet` (does not) |
 | `add_decoys_to_reference_list` | `true` | add decoys to a reference list that has none |
-| `search_min_reference_ids` | `10` | warn when a run detects fewer reference peptides. The pipeline stops only when no run detects any |
+| `search_min_reference_ids` | `10` | warn when a run detects fewer reference peptides (on screen and in `warnings.txt`). The pipeline stops only when no run detects any |
 | `pyprophet_level` | `ms2` | `ms2` or `ms1ms2` |
 | `pyprophet_learn_args` | XGBoost classifier | add `--pi0_lambda 0 0 0` if the run stops with `pi0 <= 0` |
 | `pyprophet_apply_args` | `--classifier=XGBoost` | |
@@ -177,7 +177,7 @@ measured only in its own isolation window; there is nothing to set.
 | `tric_args` | `--method LocalMST --realign_method lowess_cython --max_rt_diff 60 --mst:useRTCorrection True --mst:Stdev_multiplier 3.0 --fdr_cutoff 0.01 --max_fdr_quality 0.05` | TRIC options. Setting it replaces the whole default |
 | `quant_min_runs` | `2` | warn when a route has fewer runs: quantification needs several |
 | `quant_require_min_runs` | `false` | make that warning stop the run |
-| `quant_max_zero_ion_fraction` | `0.5` | warn when more than this fraction of measurements matched no fragment ion. If none matched any, the run stops |
+| `quant_max_zero_ion_fraction` | `0.5` | warn when more than this fraction of measurements matched no fragment ion (on screen and in `warnings.txt`). If none matched any, the run stops |
 | `augment_context_with_diathem` | `false` | OpenSWATH PRM: give Context-MS diathem's statistics as extra features |
 
 ### diathem

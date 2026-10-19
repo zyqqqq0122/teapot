@@ -45,7 +45,8 @@ Library preparation runs once per engine:
 merged, each condition searched, all exported together.
 
 Every route ends the same way: `MERGE_QUANT_<ENGINE>_<MODE>` builds one long
-table, `FINALIZE_QUANT` writes the reporting tables, and `QUANTIFY_HEAVY_LIGHT`
+table; on SIL runs `DERIVE_PAIR_RT_TOLERANCE` derives from it how far apart the two peaks
+of a pair may lie; `FINALIZE_QUANT` writes the reporting tables, and `QUANTIFY_HEAVY_LIGHT`
 runs when `heavy_label` is set and `standard_amounts` is given. Four mergers exist
 because the routes expose abundance differently; `FINALIZE_QUANT` is shared, so
 the output shape does not depend on the route.
@@ -137,16 +138,17 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 
 | module | does |
 |---|---|
-| `complete_channels` | synthesizes the missing light or heavy twin of each peptide, in either direction, skipping entries whose twin exists and proteins in `complete_channels_skip_proteins` |
+| `complete_channels` | synthesizes the missing light or heavy twin of each peptide, in either direction, skipping entries whose twin exists and proteins in `complete_channels_skip_proteins`. Reads a `.blib` as BiblioSpec writes it in any version: peak arrays raw or zlib-compressed, `RefSpectra` columns and protein tables as present. A printed mass stands for the exact one it rounds to, from the entry's rows in the `Modifications` table or a label's delta, matched by value because some vendors' tables misplace positions; an entry printed more coarsely (BiblioSpec's `K[+8.0]`) is rewritten with the exact masses, so later steps recognize its label and compute its fragments |
 | `emit_irt_library` | extracts iRT anchors (and an OpenSWATH iRT TSV) from the original `.blib`, not the channel-completed one |
 | `derive_irt_from_reference_list` | iRT anchors from the reference list's RT column (OpenSWATH routes, non-`.blib` sources) |
 | `harmonize_rt` | regresses a library's RT onto the anchor scale; can emit a full-window flag when `rt_harmonize_fallback: full_window` |
-| `merge_libraries` | unions the reference and background libraries (SQLite). A background exported from several runs holds one entry per peptide and run; only the best-scoring one is kept (lower `Score` is better, as in EncyclopeDIA). A peptide the reference library links to a protein keeps only those links; the background's links are added for the other peptides |
+| `merge_libraries` | unions the reference and background libraries (SQLite). A background exported from several runs holds one entry per peptide and run; only the best-scoring one is kept (lower `Score` is better, as in EncyclopeDIA). A peptide the reference library links to a protein keeps only those links; the background's links are added for the other peptides. Copies the `entries` columns both libraries have, since older EncyclopeDIA versions lack later ones (`IonMobility`, `QuantifiedIonsArray`) |
 | `assert_rt_coherent` | stops if the two halves of a merged library are not on one RT scale |
 | `assert_background_adequate` | stops if the background has fewer than `background_min_targets` peptides |
 | `strip_reference_decoys` | decoy-free copy of the reference list, for diathem |
 | `restrict_background` | with `background_peptides`: keeps, of a predicted background, the peptides among the `background_peptides_top` a PeptideAtlas build observes most often, or those of a list |
 | `normalize_reference_mods` | rewrites a supplied reference list to the library's modification notation (EncyclopeDIA PRM route), see below |
+| `check_reference_coverage` | which reference precursors of a supplied list the library holds at their charge (EncyclopeDIA PRM route), see below |
 
 ### `openms/`, `context_ms/`, `pyprophet/`, `tric/`
 
@@ -157,8 +159,8 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 | `openswath_workflow` | the OpenSWATH search. On a run without MS1 scans it turns MS1 scoring off, which otherwise crashes OpenSwathWorkflow |
 | `extract_openswath_intensity` | peak areas from the `.osw`: per precursor, of the feature the FDR step identified (its `SpecId` is `f<feature id>_...`), else of the largest peak. It runs after the FDR step for that reason; OpenSWATH reports several candidate peaks per precursor |
 | `split_openswath_features`, `context_ms_run` | split features into reference and background, ordered by precursor and retention time (OpenSWATH's feature ids are random), then rescore with Context-MS |
-| `pyprophet_score_single`, `pyprophet_to_psm` | the pyprophet alternative on OpenSWATH PRM: one model per run, reshaped to Context-MS's output columns |
-| `pyprophet_subsample`, `_merge`, `_learn`, `_apply`, `_export` | OpenSWATH DIA: one model learned over all runs, applied to each |
+| `pyprophet_score_single`, `pyprophet_to_psm` | the pyprophet alternative on OpenSWATH PRM: one model per run, reshaped to Context-MS's output columns. Per peptide it keeps the peak group with the lowest $q$ value and, as pyprophet's $q$ values tie, of those the best score (a stable sort) |
+| `pyprophet_subsample`, `_merge`, `_learn`, `_apply`, `_export` | OpenSWATH DIA: one model learned over all runs, applied to each. With `run_tric` the export reaches TRIC's `--max_fdr_quality`, from `tric_args`, so TRIC has the peak groups it fills a run's gaps with; detection stays at `fdr` |
 | `assert_search_productive` | per run, reports how many reference peptides the FDR step identified; stops when every $q$ value is 1 (no decoys). The PRM subworkflows stop when no run identified anything, so one empty run (a blank, a failed injection) does not end a cohort |
 | `tric_feature_alignment` | cross-run alignment, OpenSWATH DIA only, when `run_tric` |
 
@@ -170,8 +172,9 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 | `select_diathem_targets` | diathem's targets on a DIA route without a reference list: the precursors identified at $q \le$ `fdr` in at least one run, and the prior library cut to them |
 | `augment_context_features` | adds diathem's statistics to Context-MS features (`augment_context_with_diathem`, OpenSWATH PRM) |
 | `merge_quant_<engine>_<mode>` | joins identifications and every tool's abundance into one long table |
-| `assert_quant_productive` | stops if the quantification `analysis.elib` matched no fragment ions (EncyclopeDIA routes) |
-| `finalize_quant` | `quant.full.tsv`, `quant.reference.tsv`, `quant.reference.confident.tsv` and `quant_summary.tsv` |
+| `assert_quant_productive` | stops if the quantification `analysis.elib` matched no fragment ions, warns above `quant_max_zero_ion_fraction` (EncyclopeDIA routes) |
+| `derive_pair_rt_tolerance` | SIL runs: how far apart a light and its heavy standard may be measured and still pair (`pair_rt_tolerance_seconds`, §8), in `pair_rt_tolerance.tsv`, which `finalize_quant` and `quantify_heavy_light` read |
+| `finalize_quant` | `quant.full.tsv`, `quant.reference.tsv`, `quant.reference.confident.tsv` and `quant_summary.tsv`; warns about runs below `search_min_reference_ids` |
 | `quantify_heavy_light` | light/heavy pairs and absolute pmol |
 
 ### `bin/` and `lib/`
@@ -179,9 +182,10 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 `bin/` holds the longer Python bodies: `harmonize_rt.py`, `complete_channels.py`,
 `merge_libraries.py`, `assert_rt_coherent.py`, `emit_irt_library.py`,
 `derive_irt_from_reference_list.py`,
-`normalize_reference_mods.py`, `select_diathem_targets.py`, `remove_survey_scans.py`,
-`restrict_background.py`, `diathem_quant.py` (the precursor tolerance `DIATHEM_QUANT`
-passes diathem, §7). Shorter modules inline their Python in a heredoc.
+`normalize_reference_mods.py`, `check_reference_coverage.py`, `select_diathem_targets.py`,
+`remove_survey_scans.py`, `restrict_background.py`, `derive_pair_rt_tolerance.py`,
+`diathem_quant.py` (the precursor tolerance `DIATHEM_QUANT` passes diathem, §7).
+Shorter modules inline their Python in a heredoc.
 
 `lib/` is required at start-up:
 
@@ -190,7 +194,14 @@ passes diathem, §7). Shorter modules inline their Python in a heredoc.
   `-enzyme` and their unit/offset flags) into the libexport calls, so quantification
   uses the same tolerances as the search. `-instrument` is not among them (§12).
 * `Fingerprint.groovy`: hashes a file or directory (the EncyclopeDIA jar) into the
-  task script, so a rebuilt jar invalidates `-resume` caching.
+  task scripts of the searches and the exports (`SEARCH_DIA`, `CONTEXT_SEARCH`, both
+  `-libexport` modules), so a rebuilt jar invalidates their `-resume` caching. It
+  hashes size and modification time on the host, so a jar inside the container reads
+  as `missing`; there the pinned container digest does the same. Nextflow does not
+  hash `bin/` scripts: after changing one, a resumed run reuses the old outputs of the
+  steps that call it.
+* `Warnings.groovy`: turns a step's `.warnings.txt`, or the `WARNING` lines of its
+  log, into messages (see below).
 
 ### Decisions behind the modules
 
@@ -229,6 +240,25 @@ decoys to estimate a reference-side FDR.
   `DECOY_<target TRAML_ID>`. It uses the reference list only as a set of sequences.
   `main.nf` adds no decoys to an OpenSWATH PRM list, because the same file feeds
   iRT anchor derivation.
+
+**Reference peptides the library does not hold.** Context scores a reference precursor
+only when the library holds its peptide, as the library writes it, at the listed charge;
+`FINALIZE_QUANT` lists any other one as not detected, the same as one searched and not
+found. On the EncyclopeDIA PRM route with a supplied list, `CHECK_REFERENCE_COVERAGE` compares
+the normalized list with the library, writes `qc/enc_prm.reference_coverage.tsv`
+(`in_library`, `other_charge_only`, `other_modifications_only`, `not_in_library`) and
+warns with the counts. A `.blib`-derived list comes from the library, so it is complete
+by construction.
+
+**Warnings reach the user.** Nextflow shows a task's stderr only when the task fails,
+so a warning a step printed was never seen. Steps that warn about the data write
+`<step>.warnings.txt`: `FINALIZE_QUANT` (runs below `search_min_reference_ids`, or
+nothing detected), `QUANTIFY_HEAVY_LIGHT` (no confident pair), `ASSERT_QUANT_PRODUCTIVE`
+(above `quant_max_zero_ion_fraction`) and `CHECK_REFERENCE_COVERAGE`. The `WARNING` lines of the
+library steps' logs are taken as well (`COMPLETE_CHANNELS`, `EMIT_IRT_LIBRARY`,
+`HARMONIZE_RT`, `DERIVE_IRT_FROM_REFERENCE_LIST`). Each subworkflow emits them as
+`warnings`; `main.nf` prints each with `log.warn` and collects them in
+`results/warnings.txt`. The per-step files are not published.
 
 **User decoys in an OpenSWATH library are replaced.** Every OpenSWATH source except
 `--openswath_pqp` goes through `OPENSWATH_ASSAY_GENERATOR` then
@@ -425,6 +455,11 @@ OOM-killed with 16 GB. Put defaults in the generic scope instead.
   scalar-only check and matched nothing
 * an unknown `engine`, a `.dia` file on the OpenSWATH engine, an `.mzXML` on the
   EncyclopeDIA engine, or an invalid `background_source`
+* a samplesheet `mode` other than `PRM` or `DIA` (such a row matched no route and was
+  dropped without a word), a repeated `sample_id` or one with characters other than
+  letters, digits and `. _ + -` (it names files and folders), and run files whose
+  names differ only in their folder (the cross-run steps stage them side by side, and
+  the mergers map results to runs by file name)
 * PRM rows that would derive their reference list from a `.blib` with
   `background_source: none` (on OpenSWATH PRM only when `openswath_prm_fdr` is not
   `pyprophet`): the reference set would equal the library, leaving nothing to
@@ -684,10 +719,19 @@ the ion trap's tolerance those scores did not help the label-free search.
   and those ratios are as far off as pairs detected apart. On the plasma SIL QC
   runs, replicates of one pool, ratios degrade steadily with the gap between the
   two measured peaks and, beyond about half a peak width, are no better than pairs
-  half a minute apart; hence `pair_rt_tolerance_seconds` 9, half the typical peak
-  width there. diathem fits each precursor on its own over the whole run, so it
-  measures the two channels apart far more often than EncyclopeDIA. `0` turns the
-  check off; a pair with a missing retention time is kept and counted in the logs.
+  detected far apart; hence the tolerance is half a peak width.
+  `pair_rt_tolerance_seconds: auto` (`DERIVE_PAIR_RT_TOLERANCE`) takes half the
+  median width of the `primary_abundance` tool's peaks of the heavy standards detected
+  in the batch: EncyclopeDIA's `RTInSecondsStop - RTInSecondsStart` of the integrated
+  peak, OpenSWATH's and TRIC's `rightWidth - leftWidth` of the feature
+  (`width_<tool>_seconds` in `base_quant`). The standards are spiked into every run, so
+  their peaks measure the chromatography without depending on the light. With fewer
+  than 20 such peaks, or a tool without widths (diathem), it falls back to 9 s. A
+  number overrides it; `DERIVE_PAIR_RT_TOLERANCE` publishes the value and its source in
+  `pair_rt_tolerance.tsv`, which `FINALIZE_QUANT` and `QUANTIFY_HEAVY_LIGHT` read.
+  diathem fits each precursor on its own over the whole run, so it measures the two
+  channels apart far more often than EncyclopeDIA. `0` turns
+  the check off; a pair with a missing retention time is kept and counted in the logs.
 * **Absolute-quant tables.** `peptide.abs_quant.tsv` has every light/heavy pair of
   every tool, with a `status`, each channel's `light_detected` and `heavy_detected`,
   the two measured retention times, `co_eluting`, and `confident`, true for exactly
@@ -730,7 +774,10 @@ the ion trap's tolerance those scores did not help the label-free search.
     `PEPTIDE`
   * file name to sample: each route's `sample_map` is built from the files it
     receives, after `MSCONVERT`; EncyclopeDIA names outputs after the full input
-    name, so its stems are matched as prefixes in both directions
+    name (`<stem>.mzML.encyclopedia.txt`), so a name maps to the run whose stem it
+    equals, with or without the run file's extension. Matching stems as prefixes
+    gave run `X_A1` the results of `X_A10` and `X_A11`; the pre-flight check that
+    run files differ in name keeps the map one to one
 * **EncyclopeDIA abundance comes from the `.elib` `peptidequants` table**, which
   keeps precursor charge. `analysis.elib.peptides.txt` sums charges and is read
   only when the `.elib` is missing or empty. libexport writes it only when it
@@ -744,13 +791,18 @@ the ion trap's tolerance those scores did not help the label-free search.
 `samplesheet.example.csv` (the `test` profile), and `masslist-decoys.jar` with its
 source `MassListDecoyGenerator.java` and `build_masslist_decoys.sh`.
 
-The jar calls EncyclopeDIA's own `PeptideUtils.reverse`, so its decoys are the ones
-the Context search generates (`LibraryEntry.getDecoy`): residue-aware reversal with
-fixed termini, no shuffle. `getSmartDecoy`, which shuffles when the reversal
+The jar reverses each target as the Context search does (`LibraryEntry.getDecoy`,
+`PeptideUtils.reverse`): residue-aware, termini fixed, no shuffle. It reverses the text
+of the residues with their modifications instead of calling `PeptideUtils.reverse`,
+which re-renders each mass from its `AminoAcidConstants`: with the generator's default
+constants every cysteine became `C[+57.0214635]`, while the search writes its decoys in
+the library's notation (a vendor `.blib`'s `C[+57.02146]`), so the decoys of cysteine
+peptides matched nothing on the list and were counted as background. An n-terminal
+modification goes after the first residue, where `PeptideUtils.getAAs` puts it.
+`getSmartDecoy`, which shuffles when the reversal
 collides or resembles its target, was tried and rejected: its decoys did not exist
 in the search space, while the real reversed decoys ended up in the background,
-and the missing ones were the high-scoring ones, biasing FDR downwards. Generation
-tracks taken sequences, so input order matters.
+and the missing ones were the high-scoring ones, biasing FDR downwards.
 
 Build it with `assets/build_masslist_decoys.sh <encyclopedia jar>`. It compiles
 with `--release 17`, because the image runs Java 17 and a newer class version
@@ -811,7 +863,8 @@ end to end.
   peptide missing from the library cannot be identified, so divide by the
   reference peptides present in the library, not by the whole list. Compare
   stripped sequences (the reference list has modifications) and use
-  `identified_peptides`, not rows: OpenSWATH reports several rows per peptide.
+  `identified_peptides`, not rows: OpenSWATH reports several rows per peptide. On
+  EncyclopeDIA PRM, `qc/enc_prm.reference_coverage.tsv` lists what the library holds.
 * **OpenSWATH counts varied between identical runs**, most on dilute samples.
   EncyclopeDIA (`-seed 1`) returned the same counts every run. On the Context route
   the cause was row order: OpenSWATH's feature ids are random per run, the features
