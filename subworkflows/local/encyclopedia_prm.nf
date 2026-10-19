@@ -1,4 +1,5 @@
 include { CONTEXT_SEARCH               } from '../../modules/local/encyclopedia/context_search'
+include { ALIGN_RETENTION_TIMES        } from '../../modules/local/runs/align_retention_times'
 include { ASSERT_SEARCH_PRODUCTIVE     } from '../../modules/local/context_ms/assert_search_productive'
 include { ENCYCLOPEDIA_LIBEXPORT       } from '../../modules/local/encyclopedia/encyclopedia_libexport'
 include { ENCYCLOPEDIA_LIBEXPORT_PER_SAMPLE         } from '../../modules/local/encyclopedia/encyclopedia_libexport_per_sample'
@@ -9,6 +10,7 @@ include { MERGE_QUANT_ENCYCLOPEDIA_PRM } from '../../modules/local/quant/merge_q
 include { DERIVE_PAIR_RT_TOLERANCE     } from '../../modules/local/quant/derive_pair_rt_tolerance'
 include { FINALIZE_QUANT               } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT            } from '../../modules/local/quant/quantify_heavy_light'
+include { QUANTIFY_STANDARD_PEAK       } from '../../modules/local/quant/quantify_standard_peak'
 
 workflow ENCYCLOPEDIA_PRM {
     take:
@@ -21,6 +23,9 @@ workflow ENCYCLOPEDIA_PRM {
     targets_prm
     no_file
     diathem_ok
+    located
+    acquired
+    rt_alignment
 
     main:
     sample_map = samples
@@ -28,7 +33,28 @@ workflow ENCYCLOPEDIA_PRM {
         .collectFile(name: 'sample_map.enc_prm.tsv', newLine: true, sort: true)
         .first()
 
-    CONTEXT_SEARCH(samples, elib, fasta)
+    def sil = (heavy_label as List)?.size() > 0
+    def warn_ch = Channel.empty()
+
+    def runs_in
+    if (rt_alignment && sil) {
+        def ids = samples.map { meta, _f, _ml -> meta.id }
+            .collectFile(name: 'samples.enc_prm.txt', newLine: true, sort: true)
+        def mine = samples.map { meta, _f, _ml -> [meta.id] }
+            .join(located.map { meta, t -> [meta.id, t] })
+            .map { _id, t -> t }
+        ALIGN_RETENTION_TIMES(ids, mine.collect().ifEmpty([]), acquired.collect().ifEmpty([]),
+                              elib, targets_prm, heavy_label, 'enc_prm')
+        warn_ch = warn_ch.mix(ALIGN_RETENTION_TIMES.out.warnings.flatMap { Warnings.inFile(it, 'enc_prm') })
+        def windows = ALIGN_RETENTION_TIMES.out.windows.flatten()
+            .map { w -> [w.name - '.apex_windows.tsv', w] }
+        runs_in = samples.map { meta, f, rl -> [meta.id, meta, f, rl] }
+            .join(windows, remainder: true)
+            .map { _id, meta, f, rl, w -> tuple(meta, f, rl, w ?: no_file) }
+    } else {
+        runs_in = samples.map { meta, f, rl -> tuple(meta, f, rl, no_file) }
+    }
+    CONTEXT_SEARCH(runs_in, elib, fasta)
 
     ASSERT_SEARCH_PRODUCTIVE(CONTEXT_SEARCH.out.ref_targets, 'encyclopedia')
     ASSERT_SEARCH_PRODUCTIVE.out.qc
@@ -72,24 +98,31 @@ workflow ENCYCLOPEDIA_PRM {
     ref_tgts  = CONTEXT_SEARCH.out.ref_targets.map  { _m, t -> t }.collect(sort: true)
     ref_feats = CONTEXT_SEARCH.out.ref_features.map { _m, t -> t }.collect(sort: true)
 
-    MERGE_QUANT_ENCYCLOPEDIA_PRM(ref_tgts, ref_feats, diathem_tsv_ch, sample_map,
+    def standard_peak_ch = Channel.value(no_file)
+    if (sil) {
+        QUANTIFY_STANDARD_PEAK(samples.map { meta, f, _rl -> tuple(meta, f) }.join(CONTEXT_SEARCH.out.ref_targets),
+                               elib, targets_prm, heavy_label, Args.flat(params.context_search_args),
+                               'enc_prm')
+        standard_peak_ch = QUANTIFY_STANDARD_PEAK.out.rows.collect()
+    }
+
+    MERGE_QUANT_ENCYCLOPEDIA_PRM(ref_tgts, ref_feats, diathem_tsv_ch, standard_peak_ch, sample_map,
                         heavy_label, params.primary_abundance,
                         ENCYCLOPEDIA_LIBEXPORT.out.elib)
 
 
     def tolerance_ch = Channel.value(no_file)
-    if ((heavy_label as List)?.size() > 0) {
+    if (sil) {
         DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, 'enc_prm')
-        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'enc_prm') }
+        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'enc_prm', params.primary_abundance, params.pair_min_coelution) }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }
     FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, targets_prm, fasta, heavy_label, tolerance_ch, 'enc_prm')
-    def warn_ch = ASSERT_QUANT_PRODUCTIVE.out.warnings
+    warn_ch = warn_ch.mix(ASSERT_QUANT_PRODUCTIVE.out.warnings
         .mix(FINALIZE_QUANT.out.warnings)
-        .flatMap { Warnings.inFile(it, 'enc_prm') }
+        .flatMap { Warnings.inFile(it, 'enc_prm') })
 
-    def do_abs = (heavy_label as List)?.size() > 0 &&
-                 standard_amounts.name != 'NO_FILE'
+    def do_abs = sil && standard_amounts.name != 'NO_FILE'
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, standard_amounts, fasta,
                           heavy_label, tolerance_ch, params.primary_abundance,

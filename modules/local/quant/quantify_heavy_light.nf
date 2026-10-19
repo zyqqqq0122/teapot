@@ -46,6 +46,7 @@ process QUANTIFY_HEAVY_LIGHT {
     SKIP_PROT = json.loads(r'''${skip_json}''')
     TOL       = float(list(csv.DictReader(open('${tolerance}'),
                                         delimiter='\\t'))[0]['tolerance_seconds'])
+    MIN_COEL  = float("${params.pair_min_coelution}")
 
     heavy_accs = { r["unimod"] for r in LABEL }
     if not heavy_accs:
@@ -81,7 +82,7 @@ process QUANTIFY_HEAVY_LIGHT {
             "Refusing to emit an empty absolute-quant table silently."
         )
 
-    methods = [m for m in ('encyclopedia', 'openswath', 'diathem', 'tric')
+    methods = [m for m in ('encyclopedia', 'openswath', 'diathem', 'tric', 'standard_peak')
                if f'abundance_{m}' in base.columns and base[f'abundance_{m}'].notna().any()]
     if not methods:
         sys.exit("no abundance_<method> columns are populated in base_long.")
@@ -157,7 +158,8 @@ process QUANTIFY_HEAVY_LIGHT {
         return c if c in base.columns and base[c].notna().any() else 'rt_apex_seconds'
 
     seen = [c for c in ('id_qvalue', 'id_pep', 'rt_apex_seconds', 'rt_encyclopedia_seconds',
-                        'abundance_encyclopedia', 'abundance_openswath', 'abundance_tric')
+                        'abundance_encyclopedia', 'abundance_openswath', 'abundance_tric',
+                        'abundance_standard_peak')
             if c in base.columns]
 
     def pair_for_method(method):
@@ -165,6 +167,9 @@ process QUANTIFY_HEAVY_LIGHT {
         rows = base if method == 'diathem' else base[base[seen].notna().any(axis=1)]
         sub = rows[[*key, 'channel', 'protein', col, 'consistency', 'id_qvalue']].copy()
         sub['rt'] = pd.to_numeric(rows[rt_col(method)], errors='coerce')
+        sub['coelution'] = (pd.to_numeric(rows['coelution_standard_peak'], errors='coerce')
+                            if method == 'standard_peak' and 'coelution_standard_peak' in rows.columns
+                            else float('nan'))
         sub[col] = pd.to_numeric(sub[col], errors='coerce')
         if f'{col}_shared_ions' in rows.columns:
             shared = pd.to_numeric(rows[f'{col}_shared_ions'], errors='coerce')
@@ -177,13 +182,15 @@ process QUANTIFY_HEAVY_LIGHT {
                                   f'{pre}_q_value': ('id_qvalue', 'min'),
                                   f'{pre}_consistency': ('consistency', 'mean'),
                                   f'{pre}_protein': ('protein', 'first'),
-                                  f'{pre}_rt_seconds': ('rt', 'first')})
+                                  f'{pre}_rt_seconds': ('rt', 'first'),
+                                  f'{pre}_coelution': ('coelution', 'max')})
         light = sub[sub['channel'] == 'light'].groupby(key).agg(**agg('light')).reset_index()
         heavy = sub[sub['channel'] == 'heavy'].groupby(key).agg(**agg('heavy')).reset_index()
         pr = light.merge(heavy, on=key, how='outer')
         pr['protein'] = pr['light_protein'].fillna(pr['heavy_protein'])
+        pr['coelution'] = pr['light_coelution']
         pr['method'] = method
-        return pr.drop(columns=['light_protein', 'heavy_protein'])
+        return pr.drop(columns=['light_protein', 'heavy_protein', 'light_coelution', 'heavy_coelution'])
 
     pairs = pd.concat([pair_for_method(m) for m in methods], ignore_index=True)
 
@@ -196,8 +203,12 @@ process QUANTIFY_HEAVY_LIGHT {
                   file=sys.stderr)
 
     gap = (pairs['light_rt_seconds'] - pairs['heavy_rt_seconds']).abs()
-    pairs['co_eluting'] = pd.array([pd.NA if (TOL <= 0 or pd.isna(g)) else bool(g <= TOL)
-                                    for g in gap], dtype='boolean')
+    def co_eluting(method, g, c):
+        if method == 'standard_peak':
+            return pd.NA if (MIN_COEL <= 0 or pd.isna(c)) else bool(c >= MIN_COEL)
+        return pd.NA if (TOL <= 0 or pd.isna(g)) else bool(g <= TOL)
+    pairs['co_eluting'] = pd.array([co_eluting(m, g, c) for m, g, c in
+                                    zip(pairs['method'], gap, pairs['coelution'])], dtype='boolean')
 
     std = pd.read_csv(STD, sep=None, engine='python')
     lc = {c.lower(): c for c in std.columns}
@@ -282,15 +293,18 @@ process QUANTIFY_HEAVY_LIGHT {
             'light_abundance', 'heavy_abundance', 'ratio_L_H', 'ratio_H_L',
             'heavy_pmol_known', 'abs_pmol_light',
             'light_q_value', 'heavy_q_value', 'light_detected', 'heavy_detected',
-            'light_rt_seconds', 'heavy_rt_seconds', 'co_eluting',
+            'light_rt_seconds', 'heavy_rt_seconds', 'coelution', 'co_eluting',
             'light_consistency', 'heavy_consistency']
     if 'diathem' not in methods:
         cols = [c for c in cols if not c.endswith('_consistency')]
+    if 'standard_peak' not in methods:
+        cols = [c for c in cols if c != 'coelution']
     pairs = pairs[cols].sort_values(['method', 'sample_id', 'protein', 'peptide', 'charge'])
     pairs.to_csv("peptide.abs_quant.tsv", sep='\\t', index=False)
 
-    conf = pairs[pairs['confident']].drop(columns=['method', 'status', 'confident', 'light_detected',
-                                                   'heavy_detected', 'co_eluting'])
+    conf = pairs[pairs['confident']].drop(columns=[c for c in ('method', 'status', 'confident', 'light_detected',
+                                                               'heavy_detected', 'coelution', 'co_eluting')
+                                                   if c in pairs.columns])
     conf.to_csv("peptide.abs_quant.confident.tsv", sep='\\t', index=False)
 
     amounts = conf.dropna(subset=['abs_pmol_light'])
@@ -313,13 +327,21 @@ process QUANTIFY_HEAVY_LIGHT {
         mark = '  <- primary_abundance: confident table, matrix, protein amounts' if m == PRIMARY else ''
         print(f"  {m:14} {q['peptide'].nunique():4} peptides with both channels quantified, "
               f"{d['peptide'].nunique():4} with both detected{mark}", file=sys.stderr)
-        if TOL > 0:
+        if m == 'standard_peak' and MIN_COEL > 0:
+            print(f"  {'':14} detected pair rows: {len(d)}; the light following its standard over the "
+                  f"standard's peak (co-elution >= {MIN_COEL:g}): {int(d['co_eluting'].eq(True).sum())}, "
+                  f"not following it: {int(d['co_eluting'].eq(False).sum())}, not measured: "
+                  f"{int(d['co_eluting'].isna().sum())}", file=sys.stderr)
+        elif m != 'standard_peak' and TOL > 0:
             print(f"  {'':14} detected pair rows: {len(d)}; light and heavy peaks within "
                   f"{TOL:g} s: {int(d['co_eluting'].eq(True).sum())}, further apart: "
                   f"{int(d['co_eluting'].eq(False).sum())}, no retention time: "
                   f"{int(d['co_eluting'].isna().sum())}", file=sys.stderr)
-    if TOL <= 0:
-        print("co-elution of light and heavy not checked (pair_rt_tolerance_seconds 0)",
+    if TOL <= 0 and any(m != 'standard_peak' for m in methods):
+        print("co-elution of light and heavy peaks not checked (pair_rt_tolerance_seconds 0)",
+              file=sys.stderr)
+    if MIN_COEL <= 0 and 'standard_peak' in methods:
+        print("standard_peak: the light's co-elution with its standard not checked (pair_min_coelution 0)",
               file=sys.stderr)
     print(f"confident pairs: {len(conf)}, {len(amounts)} of them with a known amount "
           f"(matrix and protein amounts)", file=sys.stderr)
@@ -340,6 +362,7 @@ process QUANTIFY_HEAVY_LIGHT {
       primary: '${primary}'
       min_consistency: '${min_consistency}'
       pair_rt_tolerance_seconds: '${params.pair_rt_tolerance_seconds}'
+      pair_min_coelution: '${params.pair_min_coelution}'
     EOF
     """
 

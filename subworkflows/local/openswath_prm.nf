@@ -103,7 +103,7 @@ workflow OPENSWATH_PRM {
     def tolerance_ch = Channel.value(no_file)
     if ((heavy_label as List)?.size() > 0) {
         DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_OPENSWATH_PRM.out.long, 'osw_prm')
-        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_prm') }
+        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_prm', params.primary_abundance, params.pair_min_coelution) }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }
     FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_PRM.out.long, targets_prm, fasta, heavy_label, tolerance_ch, 'osw_prm')

@@ -28,7 +28,8 @@ def main():
     if setting.lower() != 'auto':
         tol, source = float(setting), 'set by pair_rt_tolerance_seconds'
     else:
-        wcol, acol = f'width_{a.primary}_seconds', f'abundance_{a.primary}'
+        tool = 'encyclopedia' if a.primary == 'standard_peak' else a.primary
+        wcol, acol = f'width_{tool}_seconds', f'abundance_{tool}'
         widths = []
         with open(a.base) as f:
             for r in csv.DictReader(f, delimiter='\t'):
@@ -41,11 +42,11 @@ def main():
         if len(widths) >= MIN_PEAKS:
             median = statistics.median(widths)
             tol = round(median / 2, 2)
-            source = (f'half the median width, {median:.2f} s, of the {a.primary} peaks of '
+            source = (f'half the median width, {median:.2f} s, of the {tool} peaks of '
                       f'{len(widths)} detected heavy standards')
         else:
             tol = FALLBACK
-            source = (f'{FALLBACK:g} s: fewer than {MIN_PEAKS} {a.primary} peaks of detected '
+            source = (f'{FALLBACK:g} s: fewer than {MIN_PEAKS} {tool} peaks of detected '
                       f'heavy standards with a width ({len(widths)})')
 
     with open(a.out, 'w', newline='') as f:

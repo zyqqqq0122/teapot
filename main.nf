@@ -10,6 +10,7 @@ include { OPENSWATH_DIA                } from './subworkflows/local/openswath_di
 include { OPENSWATH_PRM                } from './subworkflows/local/openswath_prm'
 include { MSCONVERT                    } from './modules/local/msconvert/msconvert'
 include { REMOVE_SURVEY_SCANS          } from './modules/local/runs/remove_survey_scans'
+include { CALIBRATE_FRAGMENT_MZ        } from './modules/local/runs/calibrate_fragment_mz'
 include { ADD_DECOYS_TO_REFERENCE_LIST } from './modules/local/encyclopedia/add_decoys_to_reference_list'
 include { NORMALIZE_REFERENCE_MODS     } from './modules/local/library/normalize_reference_mods'
 include { CHECK_REFERENCE_COVERAGE     } from './modules/local/library/check_reference_coverage'
@@ -41,8 +42,9 @@ def helpMessage() {
 
     Some settings (all of them in PARAMETERS.md):
       --primary_abundance   whose amounts fill the abundance column, and the SIL
-                            amounts: encyclopedia (the default), openswath, tric
-                            or diathem
+                            amounts: encyclopedia (the default), openswath, tric,
+                            diathem, or standard_peak (SIL runs, EncyclopeDIA:
+                            both forms measured over the heavy standard's peak)
       --run_diathem         also quantify with diathem: true (the default) or false
       --diathem_library     a library for diathem to take each peptide's expected
                             fragment intensities from, instead of the assay library
@@ -51,11 +53,23 @@ def helpMessage() {
                             the default, for label-free runs
       --standard_amounts    SIL runs: a CSV of the known amount (pmol) of each heavy
                             standard, by peptide or by protein
+      --pair_min_coelution  SIL runs measured with standard_peak: a light/heavy pair
+                            counts only when the light's signal follows its
+                            standard's over the standard's peak, their correlation
+                            at least this (default 0.7); 0 = off
       --pair_rt_tolerance_seconds
-                            SIL runs: a light/heavy pair whose two peaks lie further
-                            apart than this many seconds does not count. auto (the
-                            default): half the median peak width of your heavy
-                            standards; 0 = off
+                            SIL runs, the other tools: a light/heavy pair whose two
+                            peaks lie further apart than this many seconds does not
+                            count. auto (the default): half the median peak width of
+                            your heavy standards; 0 = off
+      --fragment_mz_calibration
+                            targeted runs: measure each run's fragment m/z error on
+                            its own targets and correct it when larger than
+                            fragment_mz_calibration_min_offset (0.1 Th): auto (the
+                            default) or off
+      --rt_alignment        SIL runs on the EncyclopeDIA routes: align the runs on
+                            their heavy standards and search each peptide only
+                            where it elutes in that run: auto (the default) or off
       --min_consistency     SIL runs: leave out of the amounts every measurement
                             whose diathem consistency is below this (default 0: none)
 
@@ -179,9 +193,27 @@ workflow {
             error "Pre-flight: ${it} must be an .elib, .dlib or .blib, got: ${params[it]}"
         }
     }
+    if (Args.mode(params.fragment_mz_calibration) == null) {
+        error "fragment_mz_calibration must be auto or off, got '${params.fragment_mz_calibration}'."
+    }
+    if (Args.mode(params.rt_alignment) == null) {
+        error "rt_alignment must be auto or off, got '${params.rt_alignment}'."
+    }
+    def half = params.rt_alignment_half_window_seconds as String
+    if (!(half == 'auto' || (half.isNumber() && (half as double) > 0))) {
+        error "rt_alignment_half_window_seconds must be auto or a number of seconds above 0, got '${half}'."
+    }
+    def cal_min = params.fragment_mz_calibration_min_offset as String
+    if (!(cal_min.isNumber() && (cal_min as double) >= 0)) {
+        error "fragment_mz_calibration_min_offset must be a number of Th (0 or more), got '${cal_min}'."
+    }
     def tol = params.pair_rt_tolerance_seconds as String
     if (!(tol == 'auto' || (tol.isNumber() && (tol as double) >= 0))) {
         error "pair_rt_tolerance_seconds must be auto or a number of seconds (0 = off), got '${tol}'."
+    }
+    def coel = params.pair_min_coelution as String
+    if (!(coel.isNumber() && (coel as double) >= 0 && (coel as double) <= 1)) {
+        error "pair_min_coelution must be a number from 0 to 1 (0 = off), got '${coel}'."
     }
     if (!((params.background_peptides_top as String).isInteger() && (params.background_peptides_top as int) > 0)) {
         error "background_peptides_top must be a positive whole number, got '${params.background_peptides_top}'."
@@ -396,6 +428,7 @@ workflow {
             case 'openswath':    return engine == 'openswath'
             case 'tric':         return engine == 'openswath' && mode == 'DIA' && params.run_tric
             case 'diathem':      return params.run_diathem && diathemable(engine, mode)
+            case 'standard_peak': return engine == 'encyclopedia' && (params.heavy_label ?: []).size() > 0
             default:             return false
         }
     }
@@ -409,6 +442,7 @@ workflow {
               openswath     engine openswath
               diathem       run_diathem = true, runs given as or converted to mzML
               tric          engine openswath, mode DIA, run_tric = true
+              standard_peak engine encyclopedia, SIL runs (heavy_label)
         """.stripIndent().trim()
     }
 
@@ -490,7 +524,31 @@ workflow {
 
     REMOVE_SURVEY_SCANS(normalized)
 
-    by_route = REMOVE_SURVEY_SCANS.out.run.branch { meta, _f, _ml ->
+    def warning_chs = []
+    def runs_ready = REMOVE_SURVEY_SCANS.out.run
+    def calibration_library = params.blib ?: params.openswath_blib ?: params.elib ?: params.dlib
+    def mz_on = Args.mode(params.fragment_mz_calibration) == 'auto'
+    def rt_on = Args.mode(params.rt_alignment) == 'auto'
+    def located  = Channel.empty()
+    def acquired = Channel.empty()
+    if ((mz_on || rt_on) && calibration_library) {
+        CALIBRATE_FRAGMENT_MZ(REMOVE_SURVEY_SCANS.out.run.join(REMOVE_SURVEY_SCANS.out.windows),
+                              file(calibration_library), mz_on)
+        runs_ready = CALIBRATE_FRAGMENT_MZ.out.run
+        located    = CALIBRATE_FRAGMENT_MZ.out.located
+        acquired   = CALIBRATE_FRAGMENT_MZ.out.row
+        CALIBRATE_FRAGMENT_MZ.out.row
+            .collectFile(name: 'fragment_mz_calibration.tsv', storeDir: "${params.outdir}/qc",
+                         keepHeader: true, skip: 1, sort: true)
+        warning_chs << CALIBRATE_FRAGMENT_MZ.out.warnings.flatMap { Warnings.inFile(it, 'calibration') }
+    } else if (mz_on || rt_on) {
+        log.info "Fragment m/z calibration and retention-time alignment: no spectral library given " +
+                 "(blib, openswath_blib, elib or dlib), so the runs are used as acquired and searched " +
+                 "without retention-time windows."
+    }
+    def rt_ready = rt_on && calibration_library as boolean
+
+    by_route = runs_ready.branch { meta, _f, _ml ->
         enc_dia: meta.engine == 'encyclopedia' && meta.mode == 'DIA'
         enc_prm: meta.engine == 'encyclopedia' && meta.mode == 'PRM'
         osw_dia: meta.engine == 'openswath'    && meta.mode == 'DIA'
@@ -514,7 +572,6 @@ workflow {
     def enc_dia_sample_rl = _enc_dia_ref ? file(_enc_dia_ref) : null
 
     def enc_labels = has_enc ? (params.heavy_label ?: []) : []
-    def warning_chs = []
 
     if (has_enc) {
         def enc_dia_has_reference_list =
@@ -564,7 +621,7 @@ workflow {
             }
             ENCYCLOPEDIA_PRM(enc_prm_samples, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                          diathem_lib_ch, standard_amts_ch, params.heavy_label,
-                         enc_prm_targets, no_file, diathem_ok_enc_prm)
+                         enc_prm_targets, no_file, diathem_ok_enc_prm, located, acquired, rt_ready)
             warning_chs << ENCYCLOPEDIA_PRM.out.warnings
         }
 
@@ -578,7 +635,7 @@ workflow {
             ENCYCLOPEDIA_DIA(by_route.enc_dia, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                          diathem_lib_ch, standard_amts_ch, params.heavy_label,
                          enc_dia_targets, enc_dia_has_reference_list, no_file,
-                         diathem_ok_enc_dia)
+                         diathem_ok_enc_dia, located, acquired, rt_ready)
             warning_chs << ENCYCLOPEDIA_DIA.out.warnings
         }
     }

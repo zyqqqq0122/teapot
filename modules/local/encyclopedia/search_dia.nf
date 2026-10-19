@@ -6,8 +6,7 @@ process SEARCH_DIA {
                mode: params.publish_mode
 
     input:
-    tuple val(meta), path(dia)
-    path  library
+    tuple val(meta), path(dia), path(library), path(windows)
     path  fasta
 
     output:
@@ -31,7 +30,15 @@ process SEARCH_DIA {
         -l ${library} \\
         -f ${fasta} \\
         ${Args.flat(params.dia_search_args)} \\
+        ${windows.name != 'NO_FILE' ? "-apexWindows ${windows}" : ''} \\
         2>&1 | tee ${meta.id}.search.log
+
+    if [ "${windows.name}" != "NO_FILE" ] && ! grep -q "Apex windows: read" ${meta.id}.search.log; then
+        echo "ERROR: ${meta.id} has retention-time windows (rt_alignment), but the EncyclopeDIA in use does" >&2
+        echo "not read them (-apexWindows needs contextbook 6.10.19-teapot or later). Update" >&2
+        echo "encyclopedia_container, or set rt_alignment: off." >&2
+        exit 1
+    fi
 
     cat <<-EOF > versions.yml
     "${task.process}":

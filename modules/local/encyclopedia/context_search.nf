@@ -2,14 +2,12 @@ process CONTEXT_SEARCH {
     label 'encyclopedia'
     tag   "${meta.id}"
 
-    // the run file itself is staged as an output for libexport; do not publish
-    // a copy of it (one per run, the size of the mzML)
     publishDir path: { "${params.outdir}/context_search/${meta.id}" },
                mode: params.publish_mode,
                saveAs: { fn -> fn ==~ /(?i).*\.(mzml|mzxml|dia)$/ ? null : fn }
 
     input:
-    tuple val(meta), path(prm), path(reference_list)
+    tuple val(meta), path(prm), path(reference_list), path(windows)
     path  library
     path  fasta
 
@@ -47,7 +45,15 @@ process CONTEXT_SEARCH {
         -seed     1 \\
         -plotsdir plots \\
         ${Args.flat(params.context_search_args)} \\
+        ${windows.name != 'NO_FILE' ? "-apexWindows ${windows}" : ''} \\
         2>&1 | tee ${meta.id}.context.log
+
+    if [ "${windows.name}" != "NO_FILE" ] && ! grep -q "Apex windows: read" ${meta.id}.context.log; then
+        echo "ERROR: ${meta.id} has retention-time windows (rt_alignment), but the EncyclopeDIA in use does" >&2
+        echo "not read them (-apexWindows needs contextbook 6.10.19-teapot or later). Update" >&2
+        echo "encyclopedia_container, or set rt_alignment: off." >&2
+        exit 1
+    fi
 
     cp ${prm.baseName}_reference.features.pep.output.txt ${prm.name}.encyclopedia.txt
     cp ${prm.baseName}_reference.features.pep.decoy.txt  ${prm.name}.encyclopedia.decoy.txt

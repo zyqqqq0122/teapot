@@ -1,4 +1,5 @@
 include { SEARCH_DIA                   } from '../../modules/local/encyclopedia/search_dia'
+include { ALIGN_RETENTION_TIMES        } from '../../modules/local/runs/align_retention_times'
 include { ENCYCLOPEDIA_LIBEXPORT       } from '../../modules/local/encyclopedia/encyclopedia_libexport'
 include { ASSERT_QUANT_PRODUCTIVE      } from '../../modules/local/quant/assert_quant_productive'
 include { DIATHEM_QUANT                } from '../../modules/local/diathem/diathem_quant'
@@ -8,6 +9,7 @@ include { MERGE_QUANT_ENCYCLOPEDIA_DIA } from '../../modules/local/quant/merge_q
 include { DERIVE_PAIR_RT_TOLERANCE     } from '../../modules/local/quant/derive_pair_rt_tolerance'
 include { FINALIZE_QUANT               } from '../../modules/local/quant/finalize_quant'
 include { QUANTIFY_HEAVY_LIGHT            } from '../../modules/local/quant/quantify_heavy_light'
+include { QUANTIFY_STANDARD_PEAK       } from '../../modules/local/quant/quantify_standard_peak'
 
 workflow ENCYCLOPEDIA_DIA {
     take:
@@ -21,6 +23,9 @@ workflow ENCYCLOPEDIA_DIA {
     has_reference_list
     no_file
     diathem_ok
+    located
+    acquired
+    rt_alignment
 
     main:
     sample_map = samples
@@ -28,8 +33,28 @@ workflow ENCYCLOPEDIA_DIA {
         .collectFile(name: 'sample_map.enc_dia.tsv', newLine: true, sort: true)
         .first()
 
-    dia_in = samples.map { meta, dia, _ml -> tuple(meta, dia) }
-    SEARCH_DIA(dia_in, library, fasta)
+    def sil = (heavy_label as List)?.size() > 0
+    def warn_ch = Channel.empty()
+
+    def runs_in
+    if (rt_alignment && sil && has_reference_list) {
+        def ids = samples.map { meta, _f, _ml -> meta.id }
+            .collectFile(name: 'samples.enc_dia.txt', newLine: true, sort: true)
+        def mine = samples.map { meta, _f, _ml -> [meta.id] }
+            .join(located.map { meta, t -> [meta.id, t] })
+            .map { _id, t -> t }
+        ALIGN_RETENTION_TIMES(ids, mine.collect().ifEmpty([]), acquired.collect().ifEmpty([]),
+                              library, reference_list, heavy_label, 'enc_dia')
+        warn_ch = warn_ch.mix(ALIGN_RETENTION_TIMES.out.warnings.flatMap { Warnings.inFile(it, 'enc_dia') })
+        def windows = ALIGN_RETENTION_TIMES.out.windows.flatten()
+            .map { w -> [w.name - '.apex_windows.tsv', w] }
+        runs_in = samples.map { meta, f, _ml -> [meta.id, meta, f] }
+            .join(windows, remainder: true)
+            .map { _id, meta, f, w -> tuple(meta, f, w ?: no_file) }
+    } else {
+        runs_in = samples.map { meta, f, _ml -> tuple(meta, f, no_file) }
+    }
+    SEARCH_DIA(runs_in.combine(library).map { meta, dia, w, lib -> tuple(meta, dia, lib, w) }, fasta)
 
     pooled = SEARCH_DIA.out.features.map { _m, f -> f }
         .mix(SEARCH_DIA.out.targets.map { _m, t -> t })
@@ -80,24 +105,31 @@ workflow ENCYCLOPEDIA_DIA {
                      "source in either case."
             return file("${projectDir}/assets/NO_FILE")
         }
+    def standard_peak_ch = Channel.value(no_file)
+    if (sil && has_reference_list) {
+        QUANTIFY_STANDARD_PEAK(samples.map { meta, f, _ml -> tuple(meta, f) }.join(SEARCH_DIA.out.targets),
+                               library, reference_list, heavy_label, Args.flat(params.dia_search_args),
+                               'enc_dia')
+        standard_peak_ch = QUANTIFY_STANDARD_PEAK.out.rows.collect()
+    }
+
     MERGE_QUANT_ENCYCLOPEDIA_DIA(peptides_ch, ENCYCLOPEDIA_LIBEXPORT.out.elib,
-                        enc_targets_ch, diathem_tsv_ch, sample_map,
+                        enc_targets_ch, diathem_tsv_ch, standard_peak_ch, sample_map,
                         heavy_label, params.primary_abundance)
 
 
     def tolerance_ch = Channel.value(no_file)
-    if ((heavy_label as List)?.size() > 0) {
+    if (sil) {
         DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, 'enc_dia')
-        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'enc_dia') }
+        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'enc_dia', params.primary_abundance, params.pair_min_coelution) }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }
     FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, reference_list, fasta, heavy_label, tolerance_ch, 'enc_dia')
-    def warn_ch = ASSERT_QUANT_PRODUCTIVE.out.warnings
+    warn_ch = warn_ch.mix(ASSERT_QUANT_PRODUCTIVE.out.warnings
         .mix(FINALIZE_QUANT.out.warnings)
-        .flatMap { Warnings.inFile(it, 'enc_dia') }
+        .flatMap { Warnings.inFile(it, 'enc_dia') })
 
-    def do_abs = (heavy_label as List)?.size() > 0 &&
-                 standard_amounts.name != 'NO_FILE'
+    def do_abs = sil && standard_amounts.name != 'NO_FILE'
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, standard_amounts, fasta,
                           heavy_label, tolerance_ch, params.primary_abundance,

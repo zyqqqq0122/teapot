@@ -52,12 +52,13 @@ process FINALIZE_QUANT {
     TOLS    = [p for p in glob.glob('tolerance/*') if os.path.basename(p) != 'NO_FILE']
     TOL     = (float(list(csv.DictReader(open(TOLS[0]), delimiter='\\t'))[0]['tolerance_seconds'])
                if TOLS else 0.0)
+    MIN_COEL = float("${params.pair_min_coelution}")
     MIN_IDS = int("${params.search_min_reference_ids}")
     warnings = []
     refs    = [p for p in glob.glob('ref/*') if os.path.basename(p) != 'NO_FILE']
     REF     = refs[0] if refs else None
     FASTA   = "${fasta}"
-    TOOLS   = ['encyclopedia', 'openswath', 'diathem', 'tric']
+    TOOLS   = ['encyclopedia', 'openswath', 'diathem', 'tric', 'standard_peak']
     SHARED  = 'abundance_%s_shared_ions' % PRIMARY
 
     def sniff(path):
@@ -195,6 +196,7 @@ process FINALIZE_QUANT {
         o['is_decoy'] = 'true' if dec else 'false'
         o['_best'] = best_peak_group(r)
         o['_shared'] = r.get(SHARED) or ''
+        o['_coel'] = r.get('coelution_standard_peak') or ''
         out.append(o)
 
     if not targets:
@@ -276,12 +278,15 @@ process FINALIZE_QUANT {
         det = {}
         for o in by_sample.get(sid, ()):
             if o['peptide'] in peptides:
-                d = det.setdefault((o['peptide'], o['charge'], o['channel']), [False, None, None])
+                d = det.setdefault((o['peptide'], o['charge'], o['channel']), [False, None, None, None])
                 if not d[0] and num(o.get('abundance')) not in (None, 0.0):
-                    d[0], d[1], d[2] = True, num(o.get(RTQ)), num(o.get('_shared'))
+                    d[0], d[1], d[2], d[3] = True, num(o.get(RTQ)), num(o.get('_shared')), num(o.get('_coel'))
         return det
 
     def co_elute(det, p, z):
+        if PRIMARY == 'standard_peak':
+            c = det[(p, z, 'light')][3]
+            return MIN_COEL <= 0 or c is None or c >= MIN_COEL
         a, b = det[(p, z, 'light')][1], det[(p, z, 'heavy')][1]
         return TOL <= 0 or a is None or b is None or abs(a - b) <= TOL
 
@@ -316,7 +321,12 @@ process FINALIZE_QUANT {
                 n_ids.append((sid, len(hit)))
                 w.writerow([ROUTE, sid, len(targets), len(hit), len(quant)])
 
-    if paired:
+    if paired and PRIMARY == 'standard_peak':
+        print("pairs_quantified: the light following its standard over the standard's peak "
+              "(co-elution >= %g); %d detected and quantified pair(s) that do not follow it not counted"
+              % (MIN_COEL, n_apart) if MIN_COEL > 0 else "pairs_quantified: co-elution not checked",
+              file=sys.stderr)
+    elif paired:
         print("pairs_quantified: light and heavy peaks (%s) within %g s; %d detected and "
               "quantified pair(s) further apart not counted" % (RTQ, TOL, n_apart)
               if TOL > 0 else "pairs_quantified: co-elution not checked", file=sys.stderr)

@@ -12,6 +12,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
     path elib
     path enc_targets, stageAs: 'enc/*'
     path diathem_tsv
+    path standard_peak, stageAs: 'standard_peak/*'
     path sample_map
     val  heavy_label
     val  primary
@@ -297,7 +298,8 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
     enc_and_ids = enc.merge(ids, on=['sample_id','stripped_seq','charge','channel'],
                              how='outer', suffixes=('_enc','_id'))
     if 'peptidoform_id' in enc_and_ids.columns:
-        enc_and_ids['peptidoform'] = enc_and_ids['peptidoform_enc'].fillna(enc_and_ids['peptidoform_id'])
+        enc_and_ids['peptidoform'] = enc_and_ids['peptidoform_enc'].fillna(
+            enc_and_ids['peptidoform_id'].map(lambda s: _flank_re.sub('', s) if isinstance(s, str) else s))
         enc_and_ids = enc_and_ids.drop(columns=['peptidoform_enc','peptidoform_id'])
     if 'channel' not in enc_and_ids.columns:
         enc_and_ids['channel'] = enc_and_ids['peptidoform'].apply(channel_of)
@@ -308,6 +310,26 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
     if 'peptidoform_d' in base.columns:
         base['peptidoform'] = base['peptidoform'].fillna(base['peptidoform_d'])
         base = base.drop(columns=['peptidoform_d'])
+    sp_rows = []
+    for f in sorted(glob.glob('standard_peak/*.standard_peak.tsv')):
+        t = pd.read_csv(f, sep='\\t')
+        t = t[t['status'] == 'measured'] if 'status' in t.columns else t.iloc[0:0]
+        if t.empty:
+            continue
+        for ch, area in (('light', 'light_area'), ('heavy', 'heavy_area')):
+            sp_rows.append(pd.DataFrame({
+                'sample_id': t['sample_id'].astype(str), 'stripped_seq': t['peptide'].astype(str),
+                'charge': pd.to_numeric(t['charge'], errors='coerce').astype(int), 'channel': ch,
+                'abundance_standard_peak': pd.to_numeric(t[area], errors='coerce'),
+                'coelution_standard_peak': pd.to_numeric(t['coelution'], errors='coerce') if ch == 'light' else None,
+                'peptidoform_sp': t['peptidoform'].astype(str) if ch == 'light' else None}))
+    if sp_rows:
+        sp = pd.concat(sp_rows, ignore_index=True)
+        sp['charge'] = sp['charge'].astype(base['charge'].dtype)
+        base = base.merge(sp, on=['sample_id','stripped_seq','charge','channel'], how='outer')
+        base['peptidoform'] = base['peptidoform'].fillna(base.pop('peptidoform_sp'))
+        print(f"standard_peak: {len(sp) // 2} pairs measured over the heavy standard's peak "
+              f"in {sp['sample_id'].nunique()} run(s)", file=sys.stderr)
     if 'peptide' not in base.columns:
         base['peptide'] = base['peptidoform']
 
@@ -316,11 +338,12 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         base.loc[_blank, 'protein'] = (base.loc[_blank, 'stripped_seq']
                                          .map(pep2prot).fillna(''))
     for c in ['abundance_openswath','abundance_diathem','abundance_encyclopedia',
-              'abundance_tric','consistency','n_effective_transitions','rt_apex_seconds',
-              'rt_encyclopedia_seconds','rt_diathem_seconds','width_encyclopedia_seconds']:
+              'abundance_tric','abundance_standard_peak','consistency','n_effective_transitions',
+              'rt_apex_seconds','rt_encyclopedia_seconds','rt_diathem_seconds',
+              'width_encyclopedia_seconds','coelution_standard_peak']:
         if c not in base.columns: base[c] = pd.NA
 
-    METHODS = ['encyclopedia','openswath','diathem','tric']
+    METHODS = ['encyclopedia','openswath','diathem','tric','standard_peak']
     _pcol = f'abundance_{PRIMARY}'
     base['abundance_primary'] = base[_pcol] if _pcol in base.columns else pd.NA
     base['abundance_primary_source'] = base['abundance_primary'].map(
@@ -339,10 +362,10 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
 
     cols = ['sample_id','peptide','peptidoform','charge','channel','protein',
             'abundance_openswath','abundance_encyclopedia',SHARED,'abundance_diathem',
-            'abundance_tric','abundance_primary','abundance_primary_source',
+            'abundance_tric','abundance_standard_peak','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
             'rt_encyclopedia_seconds','rt_diathem_seconds','width_encyclopedia_seconds',
-            'id_qvalue','id_pep','calibrated']
+            'coelution_standard_peak','id_qvalue','id_pep','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)
