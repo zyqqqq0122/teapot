@@ -16,6 +16,12 @@ process PYPROPHET_EXPORT {
     path  "versions.yml", emit: versions
 
     script:
+    def tric_q = null
+    if (params.run_tric) {
+        def m = (Args.flat(params.tric_args) =~ /--max_fdr_quality[= ](\S+)/)
+        if (m.find()) tric_q = m.group(1) as double
+    }
+    def export_q = tric_q != null ? Math.max(params.fdr as double, tric_q) : params.fdr
     """
     set -o pipefail
     
@@ -28,7 +34,7 @@ process PYPROPHET_EXPORT {
         --in=${osw} \\
         --out=${meta.id}.tsv \\
         --format=legacy_merged \\
-        --max_rs_peakgroup_qvalue=${params.fdr} \\
+        --max_rs_peakgroup_qvalue=${export_q} \\
         ${Args.flat(params.pyprophet_export_args)} \\
         2>&1 | tee ${meta.id}.export.log
 
