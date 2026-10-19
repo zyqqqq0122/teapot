@@ -96,16 +96,17 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         parts = [p.strip() for p in re.split(r'[;,]', s) if p.strip()]
         return ';'.join(sorted(set(parts)))
 
-    sm = pd.read_csv(SAMPLE_MAP, sep='\\t', header=None, names=['mzml_stem','sample_id'])
+    sm = pd.read_csv(SAMPLE_MAP, sep='\\t', header=None, names=['mzml_stem','sample_id'],
+                     dtype=str, keep_default_na=False)
     stem2sid = dict(zip(sm['mzml_stem'], sm['sample_id']))
     all_sample_ids = sm['sample_id'].tolist()
 
     def sid_from_path(p, sfx=''):
-        stem = re.sub(re.escape(sfx) + r'\$', '', os.path.basename(p))
-        for _, r in sm.iterrows():
-            if stem.startswith(r['mzml_stem']) or r['mzml_stem'].startswith(stem):
-                return r['sample_id']
-        return stem
+        stem = re.sub(re.escape(sfx) + r'\$', '', os.path.basename(str(p)))
+        for s in (stem, os.path.splitext(stem)[0]):
+            if s in stem2sid:
+                return stem2sid[s]
+        sys.exit(f"MERGE_QUANT_ENCYCLOPEDIA_DIA: {p} is none of the runs in {SAMPLE_MAP}")
 
     SHARED = 'abundance_encyclopedia_shared_ions'
     PROTON, H_ATOM, WATER, NH3 = 1.00727646681290, 1.00782503207, 18.0105646837, 17.0265491
@@ -142,7 +143,6 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         return [{names[k] for k in np.flatnonzero(np.abs(theo - m) <= ION_TOL)} for m in mzs]
 
     def shared_ion_abundance(top, keys):
-        # top: the peptidequants row of each sample, peptide, channel and charge
         val = pd.Series(float('nan'), index=top.index)
         rows = {}
         for r in top.itertuples():
@@ -202,7 +202,8 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         con = sqlite3.connect(ELIB)
         try:
             pq = pd.read_sql_query("SELECT PeptideModSeq, PrecursorCharge, SourceFile, "
-                                   "TotalIntensity, RTInSecondsCenter, QuantIonMassArray, "
+                                   "TotalIntensity, RTInSecondsCenter, RTInSecondsStart, RTInSecondsStop, "
+                                   "QuantIonMassArray, "
                                    "QuantIonIntensityArray FROM peptidequants", con)
             try:
                 p2p = pd.read_sql_query("SELECT PeptideSeq, ProteinAccession FROM "
@@ -225,7 +226,8 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
                         .agg(abundance_encyclopedia=('abundance_encyclopedia','max'),
                              peptidoform=('peptidoform','first')))
             top = pq.loc[pq.groupby(keys)['abundance_encyclopedia'].idxmax()]
-            enc_fb = enc_fb.merge(top[keys + ['RTInSecondsCenter']]
+            top = top.assign(width_encyclopedia_seconds=top['RTInSecondsStop'] - top['RTInSecondsStart'])
+            enc_fb = enc_fb.merge(top[keys + ['RTInSecondsCenter', 'width_encyclopedia_seconds']]
                                   .rename(columns={'RTInSecondsCenter': 'rt_encyclopedia_seconds'}),
                                   on=keys, how='left')
             if HAS_HEAVY:
@@ -234,7 +236,8 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
                                  .apply(dedupe_accessions))
             quant_rows.append(enc_fb[['sample_id','peptidoform','stripped_seq','charge',
                                       'channel','protein','abundance_encyclopedia',
-                                      'rt_encyclopedia_seconds'] + ([SHARED] if HAS_HEAVY else [])])
+                                      'rt_encyclopedia_seconds', 'width_encyclopedia_seconds']
+                                     + ([SHARED] if HAS_HEAVY else [])])
             print(f"abundance read from {ELIB} peptidequants: {len(enc_fb)} rows "
                   f"(charge-resolved)", file=sys.stderr)
 
@@ -314,7 +317,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
                                          .map(pep2prot).fillna(''))
     for c in ['abundance_openswath','abundance_diathem','abundance_encyclopedia',
               'abundance_tric','consistency','n_effective_transitions','rt_apex_seconds',
-              'rt_encyclopedia_seconds','rt_diathem_seconds']:
+              'rt_encyclopedia_seconds','rt_diathem_seconds','width_encyclopedia_seconds']:
         if c not in base.columns: base[c] = pd.NA
 
     METHODS = ['encyclopedia','openswath','diathem','tric']
@@ -338,7 +341,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             'abundance_openswath','abundance_encyclopedia',SHARED,'abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
-            'rt_encyclopedia_seconds','rt_diathem_seconds',
+            'rt_encyclopedia_seconds','rt_diathem_seconds','width_encyclopedia_seconds',
             'id_qvalue','id_pep','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
