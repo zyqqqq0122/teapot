@@ -160,6 +160,7 @@ results/
     quant.reference.confident.tsv    reference peptides detected per run and their abundances
     peptide.abs_quant.confident.tsv  light/heavy pairs and absolute pmol, SIL runs only
     ...                              the full table, the confident subset, and the rest of the SIL tables
+  qc/                                checks, how each run's fragment m/z were calibrated, and how the runs were aligned
   warnings.txt                       anything the pipeline wants you to check, if there is something
   pipeline_info/                     logs, timings, software versions, the Nextflow report
   ...                                intermediates from every step

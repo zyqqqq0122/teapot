@@ -37,6 +37,7 @@ rt_harmonize_min_anchor_coverage: 0.8
 # --- Absolute amounts ---------------------------------------------------------
 standard_amounts: <path/to/standard_amounts.csv>
 min_consistency:  0.0
+pair_min_coelution: 0.7
 pair_rt_tolerance_seconds: auto
 
 # --- Instrument (ion trap) -------------------
@@ -47,7 +48,7 @@ context_search_args: '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag 
 sheet_search_args:   '-ftol 0.4 -ftolunits AMU -lftol 0.4 -lftolunits AMU -frag HCD'   # runs in background_sheet, if any
 
 fdr:               0.01
-primary_abundance: encyclopedia
+primary_abundance: standard_peak
 java_mem:          '32g'
 
 run_diathem:             true

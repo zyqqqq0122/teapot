@@ -116,6 +116,23 @@ instrument's fragmentation.
 The pipeline puts every library on one retention time (RT) scale, using anchor
 peptides ([INPUTS.md](INPUTS.md#rt-anchors)).
 
+On SIL runs of the EncyclopeDIA routes (in both modes, PRM and DIA), the runs are also
+aligned with each other on their heavy standards, which are in every run. Before any
+search, the pipeline finds where each standard elutes in each run and compares the run with
+the runs acquired just before and after it. From that it knows where every peptide of your
+reference list should elute in that run, and the search looks for the peptide, its light
+form and its decoy only within a short window of time around that point. When a standard is
+found in the run itself outside that window, the window is widened to include where it was
+found. A light peptide is therefore always looked for where its standard elutes. Each run's
+alignment is in `qc/rt_alignment.<route>.tsv` and its windows in
+`qc/rt_alignment/<route>/`. A run that cannot be aligned (too few standards found, or no
+acquisition time in the file) is searched without windows, with a warning.
+
+| setting | default | |
+|---|---|---|
+| `rt_alignment` | `auto` | `auto`: as above. `off`: every peptide is looked for over the whole time its isolation window was acquired. Needs a spectral library (`blib`, `elib` or `dlib`) |
+| `rt_alignment_half_window_seconds` | `auto` | how far, in seconds, a peptide's peak may lie from where it is expected. `auto`: set for each run from how closely it agrees with its neighbours, between 10 and 30 seconds |
+
 | setting | default | |
 |---|---|---|
 | `irt_library` | `null` | your own iRT library (TraML, TSV or PQP) |
@@ -136,7 +153,8 @@ Leave `heavy_label` empty for label-free runs.
 |---|---|---|
 | `heavy_label` | `[]` | the heavy labels, e.g. `[{site: K, unimod: 'UniMod:259'}, {site: R, unimod: 'UniMod:267'}]`. `site` is a residue, `n_term` or `c_term` |
 | `standard_amounts` | `null` | the known pmol of your SIL internal standards ([INPUTS.md](INPUTS.md#known-amounts---standard_amounts)) |
-| `pair_rt_tolerance_seconds` | `auto` | a light peptide and its standard elute together: a pair gets an amount only when its two peaks lie within this many seconds. `auto` takes half the typical width of your heavy standards' peaks in these runs; give a number of seconds to set it yourself, or `0` to turn the check off |
+| `pair_min_coelution` | `0.7` | a light peptide and its standard elute together. With `primary_abundance: standard_peak` (the SIL template), a pair gets an amount only when the light's signal rises and falls with its standard's over the standard's peak: this is the lowest correlation of the two accepted, from 0 to 1 (1: they follow each other exactly). `0` turns the check off |
+| `pair_rt_tolerance_seconds` | `auto` | the same check for the other tools, which give only where each peak lies: a pair gets an amount only when its two peaks lie within this many seconds. `auto` takes half the typical width of your heavy standards' peaks in these runs; give a number of seconds to set it yourself, or `0` to turn the check off |
 | `complete_channels_skip_proteins` | `[]` | proteins that exist only as heavy, such as `['iRT_Tag']`: their peptides give no amount |
 | `min_consistency` | `0.0` | leave out measurements whose diathem `consistency` is lower |
 | `complete_channels_ion_types` | `['b','y']` | fragment ions of the light or heavy forms the pipeline adds to your library. Only `b` and `y` are supported |
@@ -167,11 +185,25 @@ Leave `heavy_label` empty for label-free runs.
 Wide survey scans are left out of the runs in your samplesheet, and each peptide is
 measured only in its own isolation window; there is nothing to set.
 
+Before any search, the pipeline also checks how far off each targeted run's fragment m/z
+are, using the run's own targets, each read in its own isolation window, and your library, and
+corrects runs that are clearly off. Two different peptides with the same precursor m/z share a
+window and are left out of this check.
+Runs with wide isolation windows (DIA) are used as they are. What it found for every run is
+in `qc/fragment_mz_calibration.tsv`. The targets it finds in each run are also what the
+retention-time alignment uses ([section 7](#7-retention-time)), so the runs are still read
+for that when the correction is off.
+
+| setting | default | |
+|---|---|---|
+| `fragment_mz_calibration` | `auto` | `auto`: measure every targeted run, and correct the runs whose fragments are off by more than `fragment_mz_calibration_min_offset`. `off`: use the runs as acquired. Needs a spectral library (`blib`, `openswath_blib`, `elib` or `dlib`) |
+| `fragment_mz_calibration_min_offset` | `0.1` | in Th (m/z). A run whose fragments are off by less than this anywhere is left as it is: correcting a well-calibrated run gains nothing |
+
 ## 11. Quantification
 
 | setting | default | |
 |---|---|---|
-| `primary_abundance` | `encyclopedia` | the tool whose abundance fills `abundance` and gives the amounts. It has to run on your data: `encyclopedia` or `openswath` with that engine, `tric` on OpenSWATH DIA runs with `run_tric: true`, `diathem` with `run_diathem: true` |
+| `primary_abundance` | `encyclopedia` | the tool whose abundance fills `abundance` and gives the amounts. It has to run on your data: `encyclopedia` or `openswath` with that engine, `tric` on OpenSWATH DIA runs with `run_tric: true`, `diathem` with `run_diathem: true`, `standard_peak` on SIL runs of the EncyclopeDIA routes: each light peptide and its heavy standard measured by the pipeline over the standard's peak, with the fragments both share, as you would in Skyline (the SIL template sets it) |
 | `run_diathem` | `true` | run diathem interference-corrected quantification |
 | `run_tric` | `false` | align features across runs. OpenSWATH DIA only |
 | `tric_args` | `--method LocalMST --realign_method lowess_cython --max_rt_diff 60 --mst:useRTCorrection True --mst:Stdev_multiplier 3.0 --fdr_cutoff 0.01 --max_fdr_quality 0.05` | TRIC options. Setting it replaces the whole default |
