@@ -199,12 +199,10 @@ def main():
     def modseq_carries_required_delta(modseq):
         if not required_deltas:
             return True
-        deltas_in_seq = [float(t) for t in re.findall(r"[-+]?\d+\.\d+",
-                                                       str(modseq or ""))]
-        for req in required_deltas:
-            for got in deltas_in_seq:
-                if abs(got - req) <= args.label_tolerance:
-                    return True
+        for got in re.findall(r"[-+]?\d+\.\d+", str(modseq or "")):
+            tol = max(args.label_tolerance, 0.5 * 10 ** -len(got.split(".")[1]) + 1e-9)
+            if any(abs(float(got) - req) <= tol for req in required_deltas):
+                return True
         return False
 
     n_transitions_written = 0
