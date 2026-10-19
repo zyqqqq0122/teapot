@@ -27,12 +27,19 @@ WATER = 18.010565
 MOD_RE = re.compile(r'\[([+\-][\d.]+)\]')
 
 
-def parse_modseq(modseq):
+def mass_of(text, exact=()):
+    printed = float(text)
+    decimals = len(text.split('.')[1]) if '.' in text else 0
+    near = [c for c in exact if abs(c - printed) <= 0.5 * 10 ** -decimals + 1e-9]
+    return min(near, key=lambda c: abs(c - printed)) if near else printed
+
+
+def parse_modseq(modseq, exact=()):
     s = modseq
     nterm = 0.0
     m = re.match(r'^\[([+\-][\d.]+)\]', s)
     if m:
-        nterm = float(m.group(1))
+        nterm = mass_of(m.group(1), exact)
         s = s[m.end():]
 
     stripped_chars = []
@@ -49,7 +56,7 @@ def parse_modseq(modseq):
             m2 = re.match(r'\[([+\-][\d.]+)\]', s[i:])
             if not m2:
                 raise ValueError(f"malformed mod at pos {i} in {modseq!r}")
-            mods[pos] = mods.get(pos, 0.0) + float(m2.group(1))
+            mods[pos] = mods.get(pos, 0.0) + mass_of(m2.group(1), exact)
             i += m2.end()
     return ''.join(stripped_chars), mods, nterm, 0.0
 
@@ -261,6 +268,24 @@ def blib_has_fileid(con):
                         for r in con.execute("PRAGMA table_info(RefSpectra)")}
 
 
+def blib_columns(con, table):
+    return {r[1].lower() for r in con.execute(f"PRAGMA table_info({table})")}
+
+
+def blib_exact_mods(con):
+    m = defaultdict(list)
+    try:
+        for rid, mass in con.execute("SELECT RefSpectraId, mass FROM Modifications"):
+            m[rid].append(float(mass))
+    except sqlite3.Error:
+        return {}
+    return m
+
+
+def inflate(blob, size):
+    return blob if len(blob) == size else zlib.decompress(blob)
+
+
 def read_blib_entries(con):
     has_fileid = blib_has_fileid(con)
     fileid_col = "rs.fileID" if has_fileid else "NULL"
@@ -272,8 +297,8 @@ def read_blib_entries(con):
         JOIN RefSpectraPeaks rp ON rp.RefSpectraId = rs.id
     """)
     for (rid, seq, modseq, z, pmz, npeaks, rt, mz_blob, it_blob, file_id) in cur:
-        mzs = list(struct.unpack(f'<{npeaks}d', mz_blob))
-        its = list(struct.unpack(f'<{npeaks}f', it_blob))
+        mzs = list(struct.unpack(f'<{npeaks}d', inflate(mz_blob, npeaks * 8)))
+        its = list(struct.unpack(f'<{npeaks}f', inflate(it_blob, npeaks * 4)))
         yield {
             'id': rid, 'peptide_seq': seq, 'peptide_mod_seq': modseq,
             'charge': z, 'precursor_mz': pmz, 'num_peaks': npeaks,
@@ -287,20 +312,18 @@ def append_blib_entry(con, entry, proteins_map, has_fileid=True):
     npeaks = len(entry['peak_mzs'])
     mz_blob = struct.pack(f'<{npeaks}d', *entry['peak_mzs'])
     it_blob = struct.pack(f'<{npeaks}f', *entry['peak_intens'])
-    fileid_col = ", fileID" if has_fileid else ""
-    fileid_val = ", ?" if has_fileid else ""
-    params = [entry['peptide_seq'], entry['peptide_mod_seq'], entry['charge'],
-              entry['precursor_mz'], npeaks, entry.get('rt', 0.0)]
+    values = {'peptideSeq': entry['peptide_seq'], 'peptideModSeq': entry['peptide_mod_seq'],
+              'precursorCharge': entry['charge'], 'precursorAdduct': '',
+              'precursorMZ': entry['precursor_mz'], 'moleculeName': '', 'chemicalFormula': '',
+              'inchiKey': '', 'otherKeys': '', 'prevAA': '-', 'nextAA': '-', 'copies': 1,
+              'numPeaks': npeaks, 'retentionTime': entry.get('rt', 0.0), 'SpecIDinFile': '',
+              'score': 0, 'scoreType': 0}
     if has_fileid:
-        params.append(entry.get('file_id'))
-    cur.execute(f"""
-        INSERT INTO RefSpectra
-          (peptideSeq, peptideModSeq, precursorCharge, precursorAdduct,
-           precursorMZ, moleculeName, chemicalFormula, inchiKey, otherKeys,
-           prevAA, nextAA, copies, numPeaks, retentionTime,
-           SpecIDinFile, score, scoreType{fileid_col})
-        VALUES (?, ?, ?, '', ?, '', '', '', '', '-', '-', 1, ?, ?, '', 0, 0{fileid_val})
-    """, params)
+        values['fileID'] = entry.get('file_id')
+    have = blib_columns(con, 'RefSpectra')
+    values = {k: v for k, v in values.items() if k.lower() in have}
+    cur.execute(f"INSERT INTO RefSpectra ({', '.join(values)}) "
+                f"VALUES ({', '.join('?' * len(values))})", list(values.values()))
     new_id = cur.lastrowid
     cur.execute(
         "INSERT INTO RefSpectraPeaks (RefSpectraId, peakMZ, peakIntensity) "
@@ -310,7 +333,7 @@ def append_blib_entry(con, entry, proteins_map, has_fileid=True):
             cur.execute(
                 "INSERT INTO Modifications (RefSpectraId, position, mass) "
                 "VALUES (?, ?, ?)", (new_id, pos, delta))
-    for pid in proteins_map.get(entry['source_id'], ()):
+    for pid in (proteins_map or {}).get(entry['source_id'], ()):
         cur.execute(
             "INSERT INTO RefSpectraProteins (RefSpectraId, ProteinId) "
             "VALUES (?, ?)", (new_id, pid))
@@ -348,14 +371,16 @@ def append_blib_entry(con, entry, proteins_map, has_fileid=True):
 
 def load_blib_proteins_map(con):
     m = defaultdict(list)
-    for rid, pid in con.execute(
-            "SELECT RefSpectraId, ProteinId FROM RefSpectraProteins"):
-        m[rid].append(pid)
+    try:
+        for rid, pid in con.execute(
+                "SELECT RefSpectraId, ProteinId FROM RefSpectraProteins"):
+            m[rid].append(pid)
+    except sqlite3.Error:
+        return None
     return m
 
 
 def load_blib_accessions(con):
-    """RefSpectraId -> set of protein accession strings."""
     try:
         rows = con.execute(
             "SELECT rp.RefSpectraId, p.accession "
@@ -459,7 +484,8 @@ def main():
             return append_blib_entry(con, entry, proteins_map, has_fileid)
 
         existing_key_query = ("SELECT peptideSeq, peptideModSeq, "
-                              "precursorCharge FROM RefSpectra")
+                              "precursorCharge, id FROM RefSpectra")
+        exact = blib_exact_mods(con)
     else:
         proteins_map = None
         accessions = {}
@@ -469,7 +495,9 @@ def main():
             return append_dlib_entry(con, entry)
 
         existing_key_query = ("SELECT PeptideSeq, PeptideModSeq, "
-                              "PrecursorCharge FROM entries")
+                              "PrecursorCharge, NULL FROM entries")
+        exact = {}
+    deltas = [float(r['delta']) for r in label_spec]
 
     if skip_proteins and not accessions:
         print(f"WARNING --skip-proteins {skip_proteins} given but this library "
@@ -477,9 +505,9 @@ def main():
               file=sys.stderr)
 
     existing_keys = set()
-    for row in con.execute(existing_key_query):
+    for row in con.execute(existing_key_query).fetchall():
         try:
-            st, mds, nt, ct = parse_modseq(row[1])
+            st, mds, nt, ct = parse_modseq(row[1], exact.get(row[3], []) + deltas)
             existing_keys.add(entry_key(st, mds, nt, ct, row[2], args.mod_tol))
         except Exception:
             pass
@@ -490,12 +518,20 @@ def main():
 
     for e in entries:
         try:
-            stripped, mods, nterm, cterm = parse_modseq(e['peptide_mod_seq'])
+            stripped, mods, nterm, cterm = parse_modseq(e['peptide_mod_seq'],
+                                                        exact.get(e['id'], []) + deltas)
+            _s, printed, printed_nterm, _c = parse_modseq(e['peptide_mod_seq'])
         except Exception as exc:
             counters['parse_fail'] += 1
             qc_rows.append((e['peptide_mod_seq'], e['charge'],
                             'parse_fail', 0.0, 0, str(exc)))
             continue
+        if fmt == 'blib' and (abs(printed_nterm - nterm) > 1e-4 or
+                              any(abs(printed.get(p, 0.0) - mods.get(p, 0.0)) > 1e-4
+                                  for p in set(printed) | set(mods))):
+            con.execute("UPDATE RefSpectra SET peptideModSeq = ? WHERE id = ?",
+                        (build_modseq(stripped, mods, nterm, cterm), e['id']))
+            counters['written_exactly'] += 1
 
         entry_accs = accessions.get(e['id'], set())
         hit = next((pat for pat in skip_proteins
@@ -602,7 +638,7 @@ def main():
     print(f"input entries:      {len(entries)}", file=sys.stderr)
     for k in ('input_light', 'input_heavy', 'input_mixed', 'input_unlabelable',
               'parse_fail', 'skipped_protein', 'twins_added',
-              'low_coverage_warn', 'already_present', 'no_peaks'):
+              'low_coverage_warn', 'already_present', 'no_peaks', 'written_exactly'):
         print(f"  {k:26} {counters[k]}", file=sys.stderr)
 
 
