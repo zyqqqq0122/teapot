@@ -54,7 +54,12 @@ def main():
     src_cur = src.cursor()
 
     src_has_provenance = PROVENANCE_COLUMN in _table_columns(src_cur, "entries")
-    entries_cols = list(ENTRIES_COLUMNS) + [PROVENANCE_COLUMN]
+    shared = _table_columns(cur, "entries") & _table_columns(src_cur, "entries")
+    lib_cols = [c for c in ENTRIES_COLUMNS if c in shared]
+    if lib_cols[:7] != list(ENTRIES_COLUMNS[:7]):
+        sys.exit(f"merge_libraries: {args.secondary} or {args.primary} lacks one of "
+                 f"{', '.join(ENTRIES_COLUMNS[:7])} in its entries table.")
+    entries_cols = lib_cols + [PROVENANCE_COLUMN]
 
     col_sql = ", ".join(entries_cols)
     placeholders = ", ".join(["?"] * len(entries_cols))
@@ -64,7 +69,7 @@ def main():
         src_select = f"SELECT {col_sql} FROM entries"
     else:
         src_select = (
-            f"SELECT {', '.join(ENTRIES_COLUMNS)}, 'background' "
+            f"SELECT {', '.join(lib_cols)}, 'background' "
             f"FROM entries"
         )
 
