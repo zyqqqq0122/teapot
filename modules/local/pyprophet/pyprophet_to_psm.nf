@@ -100,7 +100,7 @@ process PYPROPHET_TO_PSM {
     out = out[sub['_decoy'].values == 0]
     out.to_csv(f"{SID}.psm.reference.txt", sep='\\t', index=False)
 
-    pepout = (out.sort_values('q-value')
+    pepout = (out.sort_values(['q-value', 'score'], ascending=[True, False], kind='mergesort')
                  .drop_duplicates(subset=['Peptide'], keep='first'))
     pepout.to_csv(f"{SID}.peptide.reference.txt", sep='\\t', index=False)
     print(f"wrote {len(out)} PSM rows, {len(pepout)} peptide rows", file=sys.stderr)
