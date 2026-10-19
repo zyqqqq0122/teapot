@@ -23,6 +23,8 @@ process SEARCH_DIA {
     """
     set -o pipefail
 
+    echo "==> encyclopedia jar: ${params.encyclopedia_jar} [${jar_fp}]"
+
     java -Xmx${params.java_mem} -cp ${params.encyclopedia_jar} \\
         edu.washington.gs.maccoss.encyclopedia.Encyclopedia \\
         -i ${dia} \\

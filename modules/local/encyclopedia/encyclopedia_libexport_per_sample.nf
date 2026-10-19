@@ -24,6 +24,7 @@ process ENCYCLOPEDIA_LIBEXPORT_PER_SAMPLE {
     exec > >(tee -a ${meta.id}.libexport_single.log) 2>&1
 
     echo "==> per-sample libexport for ${meta.id}"
+    echo "==> encyclopedia jar: ${params.encyclopedia_jar} [${jar_fp}]"
     echo "==> inherited search args: ${inherited ?: '(none)'}"
 
     src=\$(ls *.encyclopedia.txt | head -n1)
