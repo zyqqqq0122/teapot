@@ -13,6 +13,12 @@ class Args {
 		'-enzyme',
 	]
 
+	static String mode(Object value) {
+		if (value in [false, 'false', 'off', 'OFF', 'Off']) return 'off'
+		if (value in [true, 'true', 'auto']) return 'auto'
+		return null
+	}
+
 	static String inherit(Object searchArgs) {
 		def toks = flat(searchArgs).split(' ').findAll { it }
 		def out = []
