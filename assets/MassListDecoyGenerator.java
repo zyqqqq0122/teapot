@@ -9,8 +9,6 @@ import java.util.HashSet;
 import edu.washington.gs.maccoss.encyclopedia.context.IsolationWindow;
 import edu.washington.gs.maccoss.encyclopedia.context.IsolationWindowReader;
 import edu.washington.gs.maccoss.encyclopedia.datastructures.AminoAcidConstants;
-import edu.washington.gs.maccoss.encyclopedia.datastructures.SearchParameters;
-import edu.washington.gs.maccoss.encyclopedia.filereaders.PecanParameterParser;
 import edu.washington.gs.maccoss.encyclopedia.utils.massspec.PeptideUtils;
 
 public class MassListDecoyGenerator {
@@ -51,7 +49,6 @@ public class MassListDecoyGenerator {
             }
         }
 
-        SearchParameters params = PecanParameterParser.getDefaultParametersObject();
         AminoAcidConstants constants = new AminoAcidConstants();
 
         HashSet<String> takenSequences = new HashSet<String>();
@@ -64,7 +61,7 @@ public class MassListDecoyGenerator {
             byte charge = target.getCharge();
             takenSequences.add(sequence);
 
-            String decoy = PeptideUtils.reverse(sequence, params.getAAConstants());
+            String decoy = reverseText(sequence);
             String correctedDecoyMass = PeptideUtils.getCorrectedMasses(decoy, constants);
             double decoyMz = constants.getChargedMass(correctedDecoyMass, charge);
             takenSequences.add(decoy);
@@ -73,6 +70,34 @@ public class MassListDecoyGenerator {
                                            target.getRtMin(), target.getRtMax(), true));
         }
         return output;
+    }
+
+    static String reverseText(String sequence) {
+        ArrayList<String> aas = new ArrayList<String>();
+        String nterm = "";
+        int i = 0;
+        while (i < sequence.length()) {
+            char c = sequence.charAt(i);
+            if (c == '[') {
+                int end = sequence.indexOf(']', i);
+                String mod = sequence.substring(i, end + 1);
+                if (aas.isEmpty()) {
+                    nterm += mod;
+                } else {
+                    aas.set(aas.size() - 1, aas.get(aas.size() - 1) + mod);
+                }
+                i = end + 1;
+            } else {
+                aas.add(aas.isEmpty() ? c + nterm : Character.toString(c));
+                i++;
+            }
+        }
+        for (int start = 1, stop = aas.size() - 2; start < stop; start++, stop--) {
+            String t = aas.get(start);
+            aas.set(start, aas.get(stop));
+            aas.set(stop, t);
+        }
+        return String.join("", aas);
     }
 
     private static void write(ArrayList<IsolationWindow> windows, File output) throws IOException {
