@@ -19,6 +19,7 @@ process DERIVE_IRT_FROM_REFERENCE_LIST {
 
     script:
     """
+    # bin/derive_irt_from_reference_list.py ${Fingerprint.of("${projectDir}/bin/derive_irt_from_reference_list.py")}: a changed script reruns the step
     set -o pipefail
 
     derive_irt_from_reference_list.py \\

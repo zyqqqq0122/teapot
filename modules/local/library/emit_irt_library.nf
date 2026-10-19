@@ -29,6 +29,7 @@ process EMIT_IRT_LIBRARY {
     }.findAll { it != null }
     def deltas_arg = _deltas ? _deltas.collect { String.format('%.4f', it) }.join(',') : ''
     """
+    # bin/emit_irt_library.py ${Fingerprint.of("${projectDir}/bin/emit_irt_library.py")}: a changed script reruns the step
     set -o pipefail
 
     emit_irt_library.py \\

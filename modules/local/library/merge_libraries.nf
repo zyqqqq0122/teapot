@@ -19,6 +19,7 @@ process MERGE_LIBRARIES {
 
     script:
     """
+    # bin/merge_libraries.py ${Fingerprint.of("${projectDir}/bin/merge_libraries.py")}: a changed script reruns the step
     set -o pipefail
 
     merge_libraries.py \\

@@ -18,6 +18,7 @@ process REMOVE_SURVEY_SCANS {
 
     script:
     """
+    # bin/remove_survey_scans.py ${Fingerprint.of("${projectDir}/bin/remove_survey_scans.py")}: a changed script reruns the step
     remove_survey_scans.py \\
         --run   ${run} \\
         --out   targeted/${run.name} \\

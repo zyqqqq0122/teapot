@@ -31,6 +31,7 @@ process HARMONIZE_RT {
     def cov_arg     = params.rt_harmonize_min_anchor_coverage != null ?
                         "--min-anchor-coverage ${params.rt_harmonize_min_anchor_coverage}" : ''
     """
+    # bin/harmonize_rt.py ${Fingerprint.of("${projectDir}/bin/harmonize_rt.py")}: a changed script reruns the step
     set -o pipefail
 
     harmonize_rt.py \\

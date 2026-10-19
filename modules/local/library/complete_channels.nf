@@ -33,6 +33,7 @@ process COMPLETE_CHANNELS {
     def out_name   = "${library.baseName}.complete.${ext}"
     def ion_types  = (params.complete_channels_ion_types as List).join(',')
     """
+    # bin/complete_channels.py ${Fingerprint.of("${projectDir}/bin/complete_channels.py")}: a changed script reruns the step
     set -o pipefail
 
     complete_channels.py \\

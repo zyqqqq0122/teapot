@@ -26,6 +26,7 @@ process SELECT_DIATHEM_TARGETS {
     script:
     def lib_arg = library.name.tokenize('/').last() == 'NO_FILE' ? '' : "--library ${library}"
     """
+    # bin/select_diathem_targets.py ${Fingerprint.of("${projectDir}/bin/select_diathem_targets.py")}: a changed script reruns the step
     set -o pipefail
 
     select_diathem_targets.py \\

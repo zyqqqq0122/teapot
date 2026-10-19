@@ -18,6 +18,7 @@ process DERIVE_PAIR_RT_TOLERANCE {
 
     script:
     """
+    # bin/derive_pair_rt_tolerance.py ${Fingerprint.of("${projectDir}/bin/derive_pair_rt_tolerance.py")}: a changed script reruns the step
     derive_pair_rt_tolerance.py --base ${base_long} --primary ${params.primary_abundance} --fdr ${params.fdr} \\
         --setting '${params.pair_rt_tolerance_seconds}' --out pair_rt_tolerance.tsv
 

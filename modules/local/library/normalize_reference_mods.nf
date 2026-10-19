@@ -20,6 +20,7 @@ process NORMALIZE_REFERENCE_MODS {
     script:
     def out_name = "${reference_list.baseName}.normalized.${reference_list.extension}"
     """
+    # bin/normalize_reference_mods.py ${Fingerprint.of("${projectDir}/bin/normalize_reference_mods.py")}: a changed script reruns the step
     set -o pipefail
 
     normalize_reference_mods.py \\

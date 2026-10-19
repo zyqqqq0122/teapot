@@ -39,6 +39,7 @@ process DIATHEM_QUANT {
     def srcenv = params.diathem_src ? "export PYTHONPATH=${params.diathem_src}:\${PYTHONPATH:-}" : ':'
     def lib_arg = library.name.tokenize('/').last() == 'NO_FILE' ? '' : "--library ${library}"
     """
+    # bin/diathem_quant.py ${Fingerprint.of("${projectDir}/bin/diathem_quant.py")}: a changed script reruns the step
     set -o pipefail
 
     ${srcenv}

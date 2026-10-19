@@ -20,6 +20,7 @@ process CHECK_REFERENCE_COVERAGE {
 
     script:
     """
+    # bin/check_reference_coverage.py ${Fingerprint.of("${projectDir}/bin/check_reference_coverage.py")}: a changed script reruns the step
     set -o pipefail
 
     check_reference_coverage.py \\

@@ -20,6 +20,7 @@ process RESTRICT_BACKGROUND {
 
     script:
     """
+    # bin/restrict_background.py ${Fingerprint.of("${projectDir}/bin/restrict_background.py")}: a changed script reruns the step
     set -o pipefail
     restrict_background.py \\
         --peptides ${peptides} \\

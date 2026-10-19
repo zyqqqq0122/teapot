@@ -19,6 +19,7 @@ process ASSERT_RT_COHERENT {
     script:
     def require_iqr = params.rt_coherence_require_iqr_overlap ? 1 : 0
     """
+    # bin/assert_rt_coherent.py ${Fingerprint.of("${projectDir}/bin/assert_rt_coherent.py")}: a changed script reruns the step
     set -o pipefail
 
     assert_rt_coherent.py \\
