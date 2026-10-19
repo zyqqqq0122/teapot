@@ -112,6 +112,8 @@ process MERGE_QUANT_OPENSWATH_DIA {
             'peak_group_rank':     t[rank] if rank else pd.NA,
             'id_pep':              t[perr] if perr else pd.NA,
             'rt_apex_seconds':     t[rt] if rt else pd.NA,
+            'width_openswath_seconds': (t['rightWidth'] - t['leftWidth']
+                                        if {'leftWidth', 'rightWidth'} <= set(t.columns) else float('nan')),
         }))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
         columns=['sample_id','peptide','peptidoform','stripped_seq','charge',
@@ -171,6 +173,9 @@ process MERGE_QUANT_OPENSWATH_DIA {
             'peptidoform':    tr[pcol].astype(str),
             'charge':         pd.to_numeric(tr[ccol], errors='coerce'),
             'abundance_tric': pd.to_numeric(tr[icol], errors='coerce'),
+            'width_tric_seconds': (pd.to_numeric(tr['rightWidth'], errors='coerce')
+                                   - pd.to_numeric(tr['leftWidth'], errors='coerce')
+                                   if {'leftWidth', 'rightWidth'} <= set(tr.columns) else float('nan')),
         }).dropna(subset=['charge'])
         tric['charge']       = tric['charge'].astype(int)
         tric['stripped_seq'] = tric['peptidoform'].apply(strip_mods)
@@ -178,7 +183,8 @@ process MERGE_QUANT_OPENSWATH_DIA {
         tric['channel'] = tric['peptidoform'].apply(channel_of)
         tric = (tric.groupby(['sample_id','peptidoform','charge','channel'],
                              dropna=False)
-                    .agg(abundance_tric=('abundance_tric','sum'))
+                    .agg(abundance_tric=('abundance_tric','sum'),
+                         width_tric_seconds=('width_tric_seconds','max'))
                     .reset_index())
 
     key = ['sample_id','stripped_seq','charge','channel']
@@ -204,7 +210,8 @@ process MERGE_QUANT_OPENSWATH_DIA {
 
     for c in ['abundance_openswath','abundance_diathem','abundance_encyclopedia',
               'abundance_tric','consistency','n_effective_transitions',
-              'rt_apex_seconds','rt_diathem_seconds']:
+              'rt_apex_seconds','rt_diathem_seconds','width_openswath_seconds',
+              'width_tric_seconds']:
         if c not in base.columns: base[c] = pd.NA
 
     METHODS = ['encyclopedia','openswath','diathem','tric']
@@ -228,6 +235,7 @@ process MERGE_QUANT_OPENSWATH_DIA {
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds','rt_diathem_seconds',
+            'width_openswath_seconds','width_tric_seconds',
             'id_qvalue','id_pep','peak_group_rank','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])

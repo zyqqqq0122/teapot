@@ -38,7 +38,8 @@ process EXTRACT_OPENSWATH_INTENSITY {
              PRE.CHARGE            AS charge,
              P.DECOY               AS decoy,
              F.EXP_RT              AS rt_apex_seconds,
-             FMS2.AREA_INTENSITY   AS abundance_openswath
+             FMS2.AREA_INTENSITY   AS abundance_openswath,
+             F.RIGHT_WIDTH - F.LEFT_WIDTH AS width_openswath_seconds
       FROM FEATURE F
       JOIN PRECURSOR_PEPTIDE_MAPPING PPM ON PPM.PRECURSOR_ID = F.PRECURSOR_ID
       JOIN PEPTIDE P                     ON P.ID              = PPM.PEPTIDE_ID
@@ -56,7 +57,7 @@ process EXTRACT_OPENSWATH_INTENSITY {
     with open(OUT, 'w', newline='') as f:
         w = csv.writer(f, delimiter='\\t')
         w.writerow(['stripped_seq', 'peptidoform', 'charge', 'decoy',
-                    'rt_apex_seconds', 'abundance_openswath'])
+                    'rt_apex_seconds', 'abundance_openswath', 'width_openswath_seconds'])
         w.writerows(row for _rank, row in best.values())
 
     n_id = sum(1 for rank, _row in best.values() if rank[0])

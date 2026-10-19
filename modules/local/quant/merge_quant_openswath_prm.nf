@@ -94,7 +94,8 @@ process MERGE_QUANT_OPENSWATH_PRM {
         t['sample_id']   = sid
         t['channel']     = t['peptidoform'].apply(channel_of)
         osw_rows.append(t[['sample_id','stripped_seq','peptidoform','charge',
-                           'channel','rt_apex_seconds','abundance_openswath']])
+                           'channel','rt_apex_seconds','abundance_openswath'] +
+                          [c for c in ['width_openswath_seconds'] if c in t.columns]])
     osw = pd.concat(osw_rows, ignore_index=True) if osw_rows else pd.DataFrame(
         columns=['sample_id','stripped_seq','peptidoform','charge','channel',
                  'rt_apex_seconds','abundance_openswath'])
@@ -157,7 +158,7 @@ process MERGE_QUANT_OPENSWATH_PRM {
 
     for c in ['abundance_openswath','abundance_diathem','abundance_encyclopedia',
               'abundance_tric','consistency','n_effective_transitions',
-              'rt_apex_seconds','rt_diathem_seconds']:
+              'rt_apex_seconds','rt_diathem_seconds','width_openswath_seconds']:
         if c not in base.columns: base[c] = pd.NA
     base['channel'] = base['channel'].fillna('light')
 
@@ -182,7 +183,7 @@ process MERGE_QUANT_OPENSWATH_PRM {
             'abundance_openswath','abundance_encyclopedia','abundance_diathem',
             'abundance_tric','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds','rt_diathem_seconds',
-            'id_qvalue','id_pep','peak_group_rank','calibrated']
+            'width_openswath_seconds','id_qvalue','id_pep','peak_group_rank','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)
