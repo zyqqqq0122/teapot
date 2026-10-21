@@ -441,9 +441,10 @@ def main():
     ap.add_argument('--ppm', type=float, default=20.0,
                     help="ppm tolerance for peak <-> theoretical matching.")
     ap.add_argument('--ion-types', default='b,y')
-    ap.add_argument('--max-frag-charge', type=int, default=2)
+    ap.add_argument('--max-frag-charge', type=int, default=3,
+                    help="fragments up to the precursor's charge, at most this")
     ap.add_argument('--coverage-hard-floor', type=float, default=0.5,
-                    help="Below this the process fails, naming the peptide.")
+                    help="a spectrum covered below this gets no twin; when most are, the run stops")
     ap.add_argument('--coverage-warn-below', type=float, default=0.9,
                     help="Below this we drop unannotated peaks (producing "
                          "an annotated-ions-only twin spectrum, which is "
@@ -515,6 +516,7 @@ def main():
     entries = list(entry_iter)
     qc_rows = []
     counters = defaultdict(int)
+    below_floor = []
 
     for e in entries:
         try:
@@ -574,16 +576,16 @@ def main():
 
         theo = list(theoretical_ions(stripped, mods, nterm, cterm,
                                      ion_types=ion_types,
-                                     max_charge=args.max_frag_charge))
+                                     max_charge=max(1, min(int(e['charge']), args.max_frag_charge))))
         ann, coverage = match_peaks(e['peak_mzs'], e['peak_intens'],
                                     theo, args.ppm)
 
+        counters['annotated'] += 1
         if coverage < args.coverage_hard_floor:
-            sys.exit(
-                f"HARD FAIL: annotation coverage {coverage:.3f} < "
-                f"hard_floor {args.coverage_hard_floor} for peptide "
-                f"{e['peptide_mod_seq']} charge {e['charge']}. Check "
-                f"ion_types / ppm tolerance / label spec.")
+            below_floor.append((e['peptide_mod_seq'], e['charge'], coverage))
+            qc_rows.append((e['peptide_mod_seq'], e['charge'], cls,
+                            coverage, 0, 'below_hard_floor'))
+            continue
 
         new_mzs, new_intens = [], []
         n_matched = 0
@@ -617,6 +619,19 @@ def main():
         qc_rows.append((e['peptide_mod_seq'], e['charge'], cls,
                         coverage, n_matched, status))
 
+    if below_floor and len(below_floor) > 0.5 * counters['annotated']:
+        sys.exit(
+            f"HARD FAIL: {len(below_floor)} of {counters['annotated']} spectra have less than "
+            f"{args.coverage_hard_floor} of their intensity on {'/'.join(ion_types)} ions up to "
+            f"{args.max_frag_charge}+ within {args.ppm} ppm (e.g. {below_floor[0][0]} charge "
+            f"{below_floor[0][1]}, {below_floor[0][2]:.3f}). Check ion_types, the ppm tolerance and "
+            f"the labels.")
+    if below_floor:
+        print(f"WARNING: {len(below_floor)} of {counters['annotated']} library spectra have less than "
+              f"{args.coverage_hard_floor} of their intensity on {'/'.join(ion_types)} ions and got no "
+              f"twin (e.g. {', '.join(f'{p} {z}+' for p, z, _c in below_floor[:3])}); listed as "
+              f"below_hard_floor in {args.qc}", file=sys.stderr)
+
     if fmt == 'blib':
         try:
             n = con.execute("SELECT COUNT(*) FROM RefSpectra").fetchone()[0]
@@ -636,9 +651,10 @@ def main():
             w.writerow(r)
 
     print(f"input entries:      {len(entries)}", file=sys.stderr)
+    counters['below_hard_floor'] = len(below_floor)
     for k in ('input_light', 'input_heavy', 'input_mixed', 'input_unlabelable',
-              'parse_fail', 'skipped_protein', 'twins_added',
-              'low_coverage_warn', 'already_present', 'no_peaks', 'written_exactly'):
+              'parse_fail', 'skipped_protein', 'twins_added', 'annotated',
+              'low_coverage_warn', 'below_hard_floor', 'already_present', 'no_peaks', 'written_exactly'):
         print(f"  {k:26} {counters[k]}", file=sys.stderr)
 
 
