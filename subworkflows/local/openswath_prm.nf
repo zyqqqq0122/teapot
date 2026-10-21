@@ -106,7 +106,7 @@ workflow OPENSWATH_PRM {
         DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_prm') }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }
-    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_PRM.out.long, targets_prm, fasta, heavy_label, tolerance_ch, no_file, 'osw_prm')
+    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_PRM.out.long, targets_prm, fasta, heavy_label, tolerance_ch, no_file, sample_map, 'osw_prm')
     def warn_ch = FINALIZE_QUANT.out.warnings
         .flatMap { Warnings.inFile(it, 'osw_prm') }
 

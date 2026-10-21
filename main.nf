@@ -538,7 +538,7 @@ workflow {
         if (files.size() == 1) return [ tuple(meta, files[0], rl) ]
         log.warn "MSCONVERT: ${meta.id} is a multi-sample acquisition -> " +
                  "${files.size()} runs: ${files.collect{ it.baseName }.join(', ')}"
-        files.collect { f -> tuple(meta + [id: f.baseName], f, rl) }
+        files.collect { f -> tuple(meta + [id: f.baseName, sheet_id: meta.id], f, rl) }
     }
 
     normalized = ext_split.ready.mix(converted)
@@ -573,6 +573,12 @@ workflow {
                  "without retention-time windows."
     }
     def rt_ready = rt_on && calibration_library as boolean
+
+    def sheet_ids = rows.collect { it.sample_id }
+    warning_chs << runs_ready.map { meta, _f, _rl -> meta.sheet_id ?: meta.id }.collect().ifEmpty([])
+        .flatMap { got -> (sheet_ids - got).collect { "run ${it}: a step failed for it before its search; it is " +
+                                                      "left out of the results (the log above and " +
+                                                      "pipeline_info/trace.txt say which step)".toString() } }
 
     by_route = runs_ready.branch { meta, _f, _ml ->
         enc_dia: meta.engine == 'encyclopedia' && meta.mode == 'DIA'

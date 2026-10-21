@@ -74,7 +74,11 @@ workflow ENCYCLOPEDIA_PRM {
     ASSERT_SEARCH_PRODUCTIVE.out.qc
         .map { _m, qc -> def l = qc.readLines(); l.size() > 1 ? (l[1].tokenize('\t')[4] as int) : 1 }
         .collect()
+        .ifEmpty([])
         .subscribe { n ->
+            if (!n) {
+                error "ENCYCLOPEDIA_PRM: the search failed for every run; the errors above say why."
+            }
             if (n.sum() == 0) {
                 error "ASSERT_SEARCH_PRODUCTIVE: no reference peptide at q <= ${params.fdr} in any " +
                       "of the ${n.size()} runs. Check the search tolerances for your instrument " +
@@ -147,7 +151,8 @@ workflow ENCYCLOPEDIA_PRM {
         }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }
-    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, targets_prm, fasta, heavy_label, tolerance_ch, coelution_ch, 'enc_prm')
+    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_PRM.out.long, targets_prm, fasta, heavy_label, tolerance_ch, coelution_ch,
+                   sample_map, 'enc_prm')
     warn_ch = warn_ch.mix(FINALIZE_QUANT.out.warnings.flatMap { Warnings.inFile(it, 'enc_prm') })
 
     def do_abs = sil && standard_amounts.name != 'NO_FILE'

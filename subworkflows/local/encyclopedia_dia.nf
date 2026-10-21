@@ -69,6 +69,9 @@ workflow ENCYCLOPEDIA_DIA {
     def batch_args = tol_ch.map { t -> Args.withBatchTolerance(params.dia_search_args, t) }
     tol_ch.subscribe { t -> log.info Warnings.fragmentTolerance(t, 'enc_dia', params.dia_search_args) }
     SEARCH_DIA(runs_in.combine(library).combine(tol_ch).map { meta, dia, w, lib, t -> tuple(meta, dia, lib, w, args_of(t, meta.id)) }, fasta)
+    SEARCH_DIA.out.features.count().subscribe { n ->
+        if (n == 0) error "ENCYCLOPEDIA_DIA: the search failed for every run; the errors above say why."
+    }
 
     def elib_ch     = Channel.value(no_file)
     def peptides_ch = Channel.value(no_file)
@@ -155,7 +158,8 @@ workflow ENCYCLOPEDIA_DIA {
         }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }
-    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, reference_list, fasta, heavy_label, tolerance_ch, coelution_ch, 'enc_dia')
+    FINALIZE_QUANT(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, reference_list, fasta, heavy_label, tolerance_ch, coelution_ch,
+                   sample_map, 'enc_dia')
     warn_ch = warn_ch.mix(FINALIZE_QUANT.out.warnings.flatMap { Warnings.inFile(it, 'enc_dia') })
 
     def do_abs = sil && standard_amounts.name != 'NO_FILE'

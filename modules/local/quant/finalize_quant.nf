@@ -16,6 +16,7 @@ process FINALIZE_QUANT {
     val   heavy_label
     path  tolerance,      stageAs: 'tolerance/*'
     path  min_coelution,  stageAs: 'coelution/*'
+    path  sample_map,     stageAs: 'runs/*'
     val   route
 
     output:
@@ -58,6 +59,8 @@ process FINALIZE_QUANT {
     COELS   = [p for p in glob.glob('coelution/*') if os.path.basename(p) != 'NO_FILE']
     MIN_COEL = (float(list(csv.DictReader(open(COELS[0]), delimiter='\\t'))[0]['min_coelution']) if COELS
                 else float("${params.pair_min_coelution}") if "${params.pair_min_coelution}" != 'auto' else 0.7)
+    RUNS     = [l.split('\\t')[1].strip() for p in glob.glob('runs/*') if os.path.basename(p) != 'NO_FILE'
+                for l in open(p) if l.strip()]
     MIN_IDS = int("${params.search_min_reference_ids}")
     warnings = []
     refs    = [p for p in glob.glob('ref/*') if os.path.basename(p) != 'NO_FILE']
@@ -177,7 +180,8 @@ process FINALIZE_QUANT {
               % (REF, len(targets), len(decoys)), file=sys.stderr)
     from_list = bool(targets)
 
-    samples = sorted({r['sample_id'] for r in rows if r.get('sample_id')})
+    samples = sorted({r['sample_id'] for r in rows if r.get('sample_id')} | set(RUNS))
+    no_results = sorted(set(RUNS) - {r['sample_id'] for r in rows if r.get('sample_id')})
     abund = {t: 'abundance_' + t for t in TOOLS}
     ran = [t for t in TOOLS if any(num(r.get(abund[t])) not in (None, 0.0) for r in rows)]
     print("tools with abundances on this route: %s; abundance = abundance_%s"
@@ -218,6 +222,7 @@ process FINALIZE_QUANT {
         o['_form'] = form
         out.append(o)
 
+    del rows
     RTQ = 'rt_%s_seconds' % PRIMARY
     if not any(o.get(RTQ) for o in out):
         RTQ = 'rt_apex_seconds'
@@ -359,7 +364,9 @@ process FINALIZE_QUANT {
     else:
         warnings += ["run %s: %d reference peptides detected at q <= %g, fewer than "
                      "search_min_reference_ids (%d)" % (sid, n, FDR, MIN_IDS)
-                     for sid, n in n_ids if n < MIN_IDS]
+                     for sid, n in n_ids if n < MIN_IDS and sid not in no_results]
+    warnings += ["run %s: no results; its search reported no peptide, or a step failed for it (the "
+                 "pipeline's log and pipeline_info/trace.txt say which)" % sid for sid in no_results]
     for line in warnings:
         print("WARNING: " + line, file=sys.stderr)
     with open('finalize_quant.warnings.txt', 'w') as f:

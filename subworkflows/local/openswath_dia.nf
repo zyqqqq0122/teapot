@@ -81,7 +81,7 @@ workflow OPENSWATH_DIA {
         DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_dia') }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }
-    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, fasta, heavy_label, tolerance_ch, no_file, 'osw_dia')
+    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, fasta, heavy_label, tolerance_ch, no_file, sample_map, 'osw_dia')
     def warn_ch = FINALIZE_QUANT.out.warnings
         .flatMap { Warnings.inFile(it, 'osw_dia') }
 
