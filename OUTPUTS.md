@@ -17,10 +17,10 @@ steps wrote, kept so you can check them.
 `quant_summary.tsv` counts, for each run, the reference peptides (or light/heavy
 pairs) it detected and quantified.
 
-A peptide is **detected** in a run when its $q$ value is ≤ `fdr`. On SIL runs a
-light peptide also has to elute with its heavy standard, as a confident pair's does
-([below](#absolute-amounts)): one the search identified elsewhere is not detected.
-A peptide is **quantified** when the `primary_abundance` tool gave
+A peptide is **detected** in a run when its $q$ value is ≤ `fdr`: the search identified it.
+On SIL runs, a light peptide and its heavy standard then count as a pair only when the light
+also elutes with its standard ([below](#absolute-amounts)); `coelution_standard_peak` shows how
+closely it does. A peptide is **quantified** when the `primary_abundance` tool gave
 it an abundance.
 
 ---
@@ -45,7 +45,7 @@ Peptides from iRT tags are listed only in `quant.full.tsv`.
 | `peptide`, `peptidoform` | the sequence, without and with its modifications |
 | `charge` | precursor charge |
 | `channel` | `light` or `heavy`. Label-free runs are all `light` |
-| `detected` | `true` when `q_value` is at most `fdr` and, for a light peptide on SIL runs, it elutes with its standard |
+| `detected` | `true` when `q_value` is at most `fdr` |
 | `q_value`, `pep` | the identification's $q$ value and posterior error probability |
 | `abundance` | the abundance to use, from the tool `primary_abundance` names |
 | `abundance_encyclopedia`, `abundance_openswath`, `abundance_diathem`, `abundance_tric` | each tool's own abundance, for the tools that ran (EncyclopeDIA's: see `encyclopedia_quant` in [PARAMETERS.md](PARAMETERS.md)) |
@@ -53,7 +53,7 @@ Peptides from iRT tags are listed only in `quant.full.tsv`.
 | `rt_apex_seconds` | retention time of the peak the search identified |
 | `rt_encyclopedia_seconds`, `rt_diathem_seconds` | retention time where that tool measured the abundance |
 | `coelution_standard_peak` | SIL runs with `standard_peak`, light peptides: how closely the light's signal follows its standard's over the standard's peak (1 = exactly) |
-| `consistency`, `n_effective_transitions` | diathem only: how well the measurement fits the expected fragments, from 0 to 1, and how many fragments support it. Leave out measurements below `quant_min_runs` |
+| `consistency`, `n_effective_transitions` | diathem only: how well the measurement fits the expected fragments, from 0 to 1, and how many fragments support it. Leave out measurements below `min_consistency` |
 
 `quant.full.tsv` also has `in_reference_list` (`true` for your reference peptides),
 `is_decoy`, and on OpenSWATH DIA `peak_group_rank` (the other tables keep rank 1).
@@ -74,7 +74,7 @@ One row per run.
 | `heavy_detected`, `light_detected` | how many had that form detected |
 | `heavy_quantified`, `light_quantified` | how many of those were also quantified |
 | `pairs_detected` | how many had both forms detected at the same charge |
-| `pairs_quantified` | how many of those were quantified in both forms, the two eluting together (see the confident pairs below). The number to read |
+| `pairs_quantified` | how many of those were quantified in both forms, the two eluting together (see the confident pairs below), counting a peptide form once whatever its charges. The number to read |
 
 ---
 
@@ -93,8 +93,10 @@ Written when your runs have SIL internal standards (`heavy_label` and
 A pair is **confident** when the `primary_abundance` tool quantified both forms,
 both were detected, and the two elute together: with `standard_peak`, the light's
 signal rises and falls with its standard's over the standard's peak (`coelution` at
-least `pair_min_coelution`); with the other tools, their peaks lie within
-`pair_rt_tolerance_seconds` of each other.
+least the run's `pair_min_coelution`); with the other tools, their peaks lie within
+the run's `pair_rt_tolerance_seconds` of each other. The matrix and the protein amounts
+take the confident pairs whose standard has a known amount; a pair whose peptide is in no
+protein of your FASTA is in the matrix with a blank `protein` and not in the protein amounts.
 
 | column | meaning |
 |---|---|
@@ -107,10 +109,10 @@ least `pair_min_coelution`); with the other tools, their peaks lie within
 | `heavy_pmol_known` | the standard's amount, from `standard_amounts` |
 | `abs_pmol_light` | the endogenous peptide's amount: `ratio_L_H` × `heavy_pmol_known` |
 | `light_q_value`, `heavy_q_value` | each form's $q$ value |
-| `light_detected`, `heavy_detected` | that form's $q$ value is at most `fdr`; for the light, it also elutes with its standard (`co_eluting` not `false`) |
+| `light_detected`, `heavy_detected` | that form's $q$ value is at most `fdr` |
 | `light_rt_seconds`, `heavy_rt_seconds` | where each form was measured; for `standard_peak`, where the search identified each form |
 | `coelution` | `standard_peak`: how closely the light's signal follows its standard's over the standard's peak, from -1 to 1 (1 = exactly) |
-| `co_eluting` | the two elute together: for `standard_peak`, `coelution` is at least `pair_min_coelution`; for the other tools, their peaks lie within `pair_rt_tolerance_seconds`. Blank when there was nothing to compare, or the check is off |
+| `co_eluting` | the two elute together: for `standard_peak`, `coelution` is at least the run's `pair_min_coelution`; for the other tools, their peaks lie within the run's `pair_rt_tolerance_seconds`. Blank when there was nothing to compare, or the check is off. A confident pair needs it not `false` |
 | `light_consistency`, `heavy_consistency` | when diathem ran: each form's `consistency` |
 
 Every `both_quantified` pair has a ratio, but only those marked `confident` are
@@ -151,22 +153,25 @@ The pipeline checks itself as it runs. A problem it cannot work around stops the
 Anything else you should look at is printed as a warning while the pipeline runs and
 collected in `warnings.txt`, which is written only when there is a warning: for
 example a run that detected fewer than `search_min_reference_ids` reference peptides,
-or reference peptides your library does not hold.
+reference peptides your library does not hold, or a run with no results. When a step fails
+for one run (an unreadable file, say), that run is left out, the others go on, and the run is
+named in `warnings.txt`; the log above it says what failed.
 
 | file | route | what it holds |
 |---|---|---|
 | `warnings.txt` | all | every warning of the run |
 | `qc/<sample>/<sample>.<engine>.search_qc.tsv` | PRM routes | each run's identifications. The run stops when a report is empty or every $q$ value came out 1 |
 | `qc/encyclopedia_prm.quant_qc.tsv`, `qc/encyclopedia_dia.quant_qc.tsv` | EncyclopeDIA routes | how many measurements matched no fragment ion. The run stops when none matched any |
-| `qc/enc_prm.reference_coverage.tsv` | EncyclopeDIA PRM, with your own reference list | each reference peptide and charge, and whether your library holds it (`in_library`), holds it only at another charge or only with other modifications, or does not hold it. A peptide your library does not hold cannot be detected |
-| `quant/<route>/pair_rt_tolerance.tsv` | SIL runs | the `pair_rt_tolerance_seconds` used for the tools that give only where each peak lies, and how `auto` arrived at it |
-| `quant/<route>/pair_min_coelution.tsv` | SIL runs measured with `standard_peak` | the `pair_min_coelution` used, and how `auto` arrived at it |
-| `qc/fragment_tolerance.<route>.tsv` | EncyclopeDIA routes | the fragment tolerance the searches used (`search_tolerance`, in `unit`), how many runs it was measured on (`runs_at_it`) and where it came from (`source`); `qc/fragment_tolerance.chromatogram.tsv` for the runs of `library_sheet` |
-| `qc/fragment_tolerance.<route>.runs.tsv` | the same | per run: how many fragment errors it gave (`fragment_errors`), the tolerance it would need on its own (`own_search_tolerance`) and the one it was searched at (`searched_at`) |
+| `qc/enc_prm.reference_coverage.tsv` | EncyclopeDIA PRM | each reference peptide and charge, and whether your library holds it (`in_library`), holds it only at another charge or only with other modifications, or does not hold it. A peptide your library does not hold cannot be detected |
+| `qc/neighbours.<route>.tsv` | EncyclopeDIA routes, targeted runs | per run: the runs whose standards (or, label-free, targets) elute most like its own (`neighbours`: up to 4, as many as together predict its standards best, none when your library's retention times predict them better), how closely each agrees (`agreement_seconds`), and how closely they, or the library, predict the run's standards (`predicted_seconds`). Each run's settings below are measured on it and these runs |
+| `quant/<route>/pair_rt_tolerance.tsv` | SIL runs | per run: the `pair_rt_tolerance_seconds` used for the tools that give only where each peak lies, and how `auto` arrived at it |
+| `quant/<route>/pair_min_coelution.tsv` | SIL runs measured with `standard_peak` | per run: the `pair_min_coelution` used, how `auto` arrived at it, and the share of the light signals moved away from their standard that reach it (`chance_pass`), also for a number you set |
+| `qc/fragment_tolerance.<route>.runs.tsv` | EncyclopeDIA routes | per run: how many fragment errors it gave (`fragment_errors`), the tolerance it would need on its own (`own_search_tolerance`), the runs it was measured with (`pooled_with`) and the tolerance it was searched at (`searched_at`) |
+| `qc/fragment_tolerance.<route>.tsv` | the same | the tolerance of all the runs together, used where every run is read at once (EncyclopeDIA's cross-run quantification); `qc/fragment_tolerance.chromatogram.tsv` for the runs of `library_sheet`, which are searched at it |
 | `qc/fragment_mz_calibration.tsv` | targeted runs (`fragment_mz_calibration`, `rt_alignment`) | per run: whether its fragment m/z were corrected (`corrected`) and why not (`status`), how far off they were at m/z 300 to 1300 (`offset_300` ... `offset_1300`, in Th), how many of its targets served as reference points (`calibrants`) and the share that disagreed, and when the run was acquired (`acquired`). A run corrected is also a warning: the instrument's calibration may need attention |
 | `qc/fragment_mz_calibration.chromatogram.tsv` | runs of `library_sheet` | the same for those runs |
 | `qc/<sample>/<sample>.fragment_mz.*` | the same | each run's details: the correction curve, the reference points, the error before and after |
-| `qc/rt_alignment.<route>.tsv` | SIL runs, EncyclopeDIA routes (`rt_alignment`) | per run: whether it was aligned (`status`, and why not), its standards found (`anchors`), the runs it was compared with (`neighbours`), how closely its standards' times agree with theirs (`residual_sd_seconds`), how far a peak may lie from where it is expected (`half_window_seconds`), the peptides given a window, how many windows were widened to include where the standard itself was found in the run (`windows_widened`), and when it was acquired. A run whose times agree poorly, or that could not be aligned, is also a warning |
+| `qc/rt_alignment.<route>.tsv` | SIL runs, EncyclopeDIA routes (`rt_alignment`) | per run: whether it was aligned (`status`, and why not), its standards found (`anchors`), what it was compared with (`reference`: its `neighbours`, or `library` for a run with none), how closely its standards' times agree with theirs (`residual_sd_seconds`), how far a peak may lie from where it is expected (`half_window_seconds`), the peptides given a window, and how many windows were widened to include where the standard itself was found in the run (`windows_widened`). A run whose times agree poorly, or that could not be aligned, is also a warning |
 | `qc/rt_alignment/<route>/<sample>.apex_windows.tsv` | the same | each reference peptide's window in that run, in seconds: the search took its peak only there |
 
 ## Other folders
@@ -196,8 +201,8 @@ or reference peptides your library does not hold.
 
 EncyclopeDIA, diathem and TRIC rely on multiple runs for quantification,
 and their accuracy improves as more runs are added to a cohort; each SIL run's
-retention times are aligned to the 4 runs acquired nearest it. With fewer than
-`quant_min_runs` (default 5) runs the pipeline warns and goes on: each run is aligned
-to the other runs there are, and a single run is searched without retention-time
-windows, so the results can be less accurate. `quant_require_min_runs: true` stops it
-instead.
+retention times are aligned to up to 4 runs whose standards elute most like its own, and its
+measured settings come from it and those runs. With fewer than `quant_min_runs` (default 5)
+runs the pipeline warns and goes on: each run is aligned to the other runs there are, and a
+single run to your library's retention times, with wider windows, so the results can be less
+accurate. `quant_require_min_runs: true` stops it instead.

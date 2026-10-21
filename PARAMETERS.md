@@ -15,8 +15,10 @@ more that the pipeline needs internally; you can ignore them.
 
 Some settings depend on the state of your runs (how far off their fragment m/z are, how their
 peptides elute, how wide their peaks are), so the pipeline measures them from your runs each time
-instead of using a fixed value. What it found is written to a table (see OUTPUTS.md); give a value
-for the setting to use your own instead.
+instead of using a fixed value. Each run's value comes from that run and the few runs most like it
+(the runs whose standards elute most like the run's own), so a run gets the same value whichever
+other runs share the batch. What it found is written to a table (see OUTPUTS.md); give a value for
+the setting to use your own instead.
 
 | setting | what is measured from your runs | to set it yourself |
 |---|---|---|
@@ -25,7 +27,6 @@ for the setting to use your own instead.
 | `rt_alignment`, `rt_alignment_half_window_seconds` | where each peptide elutes in each run, and how far from there its peak may lie ([section 7](#7-retention-time)) | `off`, or a number of seconds |
 | `pair_min_coelution` | how closely a light peptide's signal must follow its standard's to count ([section 8](#8-heavylight-channels-and-absolute-quantification)) | a number from 0 to 1 |
 | `pair_rt_tolerance_seconds` | how far apart a light's and its standard's peaks may lie, for the tools other than `standard_peak` ([section 8](#8-heavylight-channels-and-absolute-quantification)) | a number of seconds |
-| `encyclopedia_quant` | whether EncyclopeDIA's cross-run quantification is needed ([section 11](#11-quantification)) | `on` or `off` |
 
 ---
 
@@ -137,19 +138,24 @@ peptides ([INPUTS.md](INPUTS.md#rt-anchors)).
 On SIL runs of the EncyclopeDIA routes (in both modes, PRM and DIA), the runs are also
 aligned with each other on their heavy standards, which are in every run. Before any
 search, the pipeline finds where each standard elutes in each run and compares the run with
-the runs acquired just before and after it. From that it knows where every peptide of your
-reference list should elute in that run, and the search looks for the peptide, its light
-form and its decoy only within a short window of time around that point. When a standard is
-found in the run itself outside that window, the window is widened to include where it was
-found. A light peptide is therefore always looked for where its standard elutes. Each run's
-alignment is in `qc/rt_alignment.<route>.tsv` and its windows in
-`qc/rt_alignment/<route>/`. A run that cannot be aligned (too few standards found, or no
-acquisition time in the file) is searched without windows, with a warning.
+up to 4 runs whose standards elute most like its own (`qc/neighbours.<route>.tsv`), whenever
+they were acquired: runs from another LC column or setup elute differently and are not
+chosen, and a run whose setup has only one or two other runs is compared with those alone.
+Where your library's retention times predict a run better than any other run, they are
+used instead. From that it knows where every peptide of your reference list should elute in that
+run, and the search looks for the peptide, its light form and its decoy only within a short
+window of time around that point. When a standard is found in the run itself outside that
+window, the window is widened to include where it was found. A light peptide is therefore
+always looked for where its standard elutes. A run with no other run like it (a single run,
+say) is aligned to the retention times of your library instead, with wider windows. Each
+run's alignment is in `qc/rt_alignment.<route>.tsv` and its windows in
+`qc/rt_alignment/<route>/`. A run that cannot be aligned (too few standards found) is searched
+without windows, with a warning.
 
 | setting | default | |
 |---|---|---|
 | `rt_alignment` | `auto` | `auto`: as above. `off`: every peptide is looked for over the whole time its isolation window was acquired. Needs a spectral library (`blib`, `elib` or `dlib`) |
-| `rt_alignment_half_window_seconds` | `auto` | how far, in seconds, a peptide's peak may lie from where it is expected. `auto`: set for each run from how closely its standards' times agree with its neighbours' |
+| `rt_alignment_half_window_seconds` | `auto` | how far, in seconds, a peptide's peak may lie from where it is expected. `auto`: set for each run from how closely its standards' times agree with those of the runs most like it, or with your library's |
 
 | setting | default | |
 |---|---|---|
@@ -171,15 +177,15 @@ Leave `heavy_label` empty for label-free runs.
 |---|---|---|
 | `heavy_label` | `[]` | the heavy labels, e.g. `[{site: K, unimod: 'UniMod:259'}, {site: R, unimod: 'UniMod:267'}]`. `site` is a residue, `n_term` or `c_term` |
 | `standard_amounts` | `null` | the known pmol of your SIL internal standards ([INPUTS.md](INPUTS.md#known-amounts---standard_amounts)) |
-| `pair_min_coelution` | `auto` | a light peptide and its standard elute together. With `primary_abundance: standard_peak` (the SIL template), a pair gets an amount only when the light's signal rises and falls with its standard's over the standard's peak: this is the lowest correlation of the two accepted. `auto` learns it from your runs: the pipeline also reads each light's signal moved away from its standard, where the light cannot be, and takes the correlation only 1 in 20 of those reach, so that a light that does not elute with its standard rarely passes. Or give a number from 0 to 1 (1: they follow each other exactly); `0` turns the check off. The value used is in `quant/<route>/pair_min_coelution.tsv` |
-| `pair_rt_tolerance_seconds` | `auto` | the same check for the other tools, which give only where each peak lies: a pair gets an amount only when its two peaks lie within this many seconds. `auto` takes half the typical width of your heavy standards' peaks in these runs; give a number of seconds to set it yourself, or `0` to turn the check off |
+| `pair_min_coelution` | `auto` | a light peptide and its standard elute together. With `primary_abundance: standard_peak` (the SIL template), a pair gets an amount only when the light's signal rises and falls with its standard's over the standard's peak: this is the lowest correlation of the two accepted. `auto` learns it from your runs: the pipeline also reads each light's signal moved away from its standard, where the light cannot be, and takes the correlation only 1 in 20 of those reach in the run and the runs most like it, so that a light that does not elute with its standard rarely passes. Or give a number from 0 to 1 (1: they follow each other exactly); `0` turns the check off. Each run's value, and how often a moved signal reaches it, is in `quant/<route>/pair_min_coelution.tsv` |
+| `pair_rt_tolerance_seconds` | `auto` | the same check for the other tools, which give only where each peak lies: a pair gets an amount only when its two peaks lie within this many seconds. `auto` takes half the typical width of your heavy standards' peaks in the run and the runs most like it; give a number of seconds to set it yourself, or `0` to turn the check off |
 | `complete_channels_skip_proteins` | `[]` | proteins that exist only as heavy, such as `['iRT_Tag']`: their peptides give no amount |
 | `min_consistency` | `0.0` | leave out measurements whose diathem `consistency` is lower |
 | `complete_channels_ion_types` | `['b','y']` | fragment ions of the light or heavy forms the pipeline adds to your library. Only `b` and `y` are supported |
-| `complete_channels_max_frag_charge` | `2` | highest fragment charge of those forms |
+| `complete_channels_max_frag_charge` | `3` | highest fragment charge of those forms; a precursor's fragments go up to its own charge, at most this |
 | `complete_channels_tolerance_ppm` | `20.0` | tolerance for matching the library's fragment peaks to their ions |
-| `complete_channels_coverage_hard_floor` | `0.5` | stop the run if any one spectrum in your library has less than this share of its signal in `b` and `y` ions: its other form could not be made reliably |
-| `complete_channels_coverage_warn_below` | `0.9` | a spectrum below this still gets its other form, made from its `b` and `y` ions only, and is marked in `complete_channels/complete_channels_qc.tsv` |
+| `complete_channels_coverage_hard_floor` | `0.5` | a spectrum in your library with less than this share of its signal in `b` and `y` ions gets no other form, since it could not be made reliably; this is a warning, and the run stops only when most spectra are below it (then the ion types, the tolerance or the labels are wrong) |
+| `complete_channels_coverage_warn_below` | `0.9` | a spectrum below this still gets its other form, made from its `b` and `y` ions only, and is marked in `complete_channels/<library>.complete_channels_qc.tsv` |
 
 ## 9. Confidence estimation
 
@@ -218,12 +224,12 @@ for that when the correction is off.
 
 After the correction, the same targets show how far each run's fragments still lie from
 where they should, and so how wide the search's fragment tolerance needs to be. With
-`search_tolerance: auto`, the EncyclopeDIA searches of these runs use the value measured on
-all your runs together instead of the `-ftol` you gave; a run it could not be measured in keeps
-your `-ftol`. Your `-ftol` is where the check starts looking, so give one wide enough for your
-instrument before any correction ([section 6](#6-instrument-settings)). The value used is in
-`qc/fragment_tolerance.<route>.tsv` (and `qc/fragment_tolerance.chromatogram.tsv` for the runs
-of `library_sheet`).
+`search_tolerance: auto`, the EncyclopeDIA search of each run uses the value measured on that
+run and the runs most like it instead of the `-ftol` you gave; a run it could not be measured in
+keeps your `-ftol`. Your `-ftol` is where the check starts looking, so give one wide enough for
+your instrument before any correction ([section 6](#6-instrument-settings)). Each run's value is
+in `qc/fragment_tolerance.<route>.runs.tsv` (the runs of `library_sheet`, which are fractions of
+one sample, share one value: `qc/fragment_tolerance.chromatogram.tsv`).
 
 | setting | default | |
 |---|---|---|
@@ -239,9 +245,9 @@ of `library_sheet`).
 | `run_diathem` | `true` | run diathem interference-corrected quantification |
 | `run_tric` | `false` | align features across runs. OpenSWATH DIA only |
 | `tric_args` | `--method LocalMST --realign_method lowess_cython --max_rt_diff 60 --mst:useRTCorrection True --mst:Stdev_multiplier 3.0 --fdr_cutoff 0.01 --max_fdr_quality 0.05` | TRIC options. Setting it replaces the whole default |
-| `quant_min_runs` | `5` | warn when a route has fewer runs: each SIL run is then aligned to the other runs there are instead of the 4 acquired nearest it, a single run is searched without retention-time windows, and quantification across runs is less reliable. The run goes on |
+| `quant_min_runs` | `5` | warn when a route has fewer runs: each SIL run is then aligned to the other runs there are instead of up to 4 most like it, a single run to your library's retention times, and quantification across runs is less reliable. The run goes on |
 | `quant_require_min_runs` | `false` | `true`: stop instead of warning |
-| `encyclopedia_quant` | `auto` | EncyclopeDIA's own quantification across all your runs (`abundance_encyclopedia`). `auto`: only when its amounts are the ones reported (`primary_abundance: encyclopedia`). `on`: also with another `primary_abundance`, for its amounts alongside. `off`: never. It is one job over every run, the slowest step of a large batch |
+| `encyclopedia_quant` | `true` | EncyclopeDIA's own quantification across all your runs (`abundance_encyclopedia`). `true`: run it, also with another `primary_abundance`, to see its amounts alongside; it is needed with `primary_abundance: encyclopedia`. `false`: skip it (the SIL template does). It is one job over every run, the slowest step of a large batch, and its amounts depend on which runs you give together |
 | `quant_max_zero_ion_fraction` | `0.5` | warn when more than this fraction of measurements matched no fragment ion (on screen and in `warnings.txt`). If none matched any, the run stops |
 | `augment_context_with_diathem` | `false` | OpenSWATH PRM: give Context-MS diathem's statistics as extra features |
 
