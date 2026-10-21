@@ -441,7 +441,8 @@ workflow {
             case 'openswath':    return engine == 'openswath'
             case 'tric':         return engine == 'openswath' && mode == 'DIA' && params.run_tric
             case 'diathem':      return params.run_diathem && diathemable(engine, mode)
-            case 'standard_peak': return engine == 'encyclopedia' && (params.heavy_label ?: []).size() > 0
+            case 'standard_peak': return engine == 'encyclopedia' && (params.heavy_label ?: []).size() > 0 &&
+                                         (mode == 'PRM' || params.blib || rows.any { r -> sig(r) == ['encyclopedia', 'DIA'] && ref_of(r) })
             default:             return false
         }
     }
@@ -459,7 +460,8 @@ workflow {
               openswath     engine openswath
               diathem       run_diathem = true, runs given as or converted to mzML
               tric          engine openswath, mode DIA, run_tric = true
-              standard_peak engine encyclopedia, SIL runs (heavy_label)
+              standard_peak engine encyclopedia, SIL runs (heavy_label) with a reference list
+                            (or a .blib to derive it from)
         """.stripIndent().trim()
     }
 

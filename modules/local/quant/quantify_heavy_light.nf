@@ -340,10 +340,12 @@ process QUANTIFY_HEAVY_LIGHT {
     conf.to_csv("peptide.abs_quant.confident.tsv", sep='\\t', index=False)
 
     amounts = conf.dropna(subset=['abs_pmol_light'])
-    amounts.pivot_table(index=['protein', 'peptide', 'peptidoform', 'charge'], columns='sample_id',
-                        values='abs_pmol_light', aggfunc='first') \\
+    amounts.assign(protein=amounts['protein'].fillna('')) \\
+        .pivot_table(index=['protein', 'peptide', 'peptidoform', 'charge'], columns='sample_id',
+                     values='abs_pmol_light', aggfunc='first') \\
         .reset_index().to_csv("peptide.abs_quant.matrix.tsv", sep='\\t', index=False)
 
+    no_protein = int(amounts['protein'].isna().sum())
     per_peptide = (amounts.groupby(['sample_id', 'protein', 'peptide'])
                        .agg(abs_pmol_light=('abs_pmol_light', 'median')).reset_index())
     (per_peptide.groupby(['sample_id', 'protein'])
@@ -367,8 +369,8 @@ process QUANTIFY_HEAVY_LIGHT {
         print(f"  {'':14} detected pair rows: {len(i)}; the light {how}: "
               f"{int(i['co_eluting'].eq(True).sum())}, not: {int(i['co_eluting'].eq(False).sum())}, not checked: "
               f"{int(i['co_eluting'].isna().sum())}", file=sys.stderr)
-    print(f"confident pairs: {len(conf)}, {len(amounts)} of them with a known amount "
-          f"(matrix and protein amounts)", file=sys.stderr)
+    print(f"confident pairs: {len(conf)}, {len(amounts)} of them with a known amount (matrix), "
+          f"{len(amounts) - no_protein} of those with a protein (protein amounts)", file=sys.stderr)
     warnings = []
     if conf.empty:
         warnings.append(f"no light/heavy pair of '{PRIMARY}' is confident, so the confident "
