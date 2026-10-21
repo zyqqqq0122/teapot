@@ -6,7 +6,7 @@ process SEARCH_GPF {
                mode: params.publish_mode
 
     input:
-    tuple val(meta), path(combined), path(fasta)
+    tuple val(meta), path(combined), path(fasta), val(search_args)
     path  dlib
 
     output:
@@ -22,14 +22,14 @@ process SEARCH_GPF {
         -i ${combined} \\
         -l ${dlib} \\
         -f ${fasta} \\
-        ${Args.flat(params.sheet_search_args)} \\
+        ${Args.flat(search_args)} \\
         2>&1 | tee ${meta.condition}.search_gpf.log
 
     cat <<-EOF > versions.yml
     "${task.process}":
       encyclopedia:      \$(java -jar ${params.encyclopedia_jar} -version 2>&1 | head -n1)
       condition:         ${meta.condition}
-      sheet_search_args: '${params.sheet_search_args}'
+      sheet_search_args: '${Args.flat(search_args)}'
     EOF
     """
 

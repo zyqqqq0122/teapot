@@ -15,6 +15,7 @@ process FINALIZE_QUANT {
     path  fasta,          stageAs: 'fasta/*'
     val   heavy_label
     path  tolerance,      stageAs: 'tolerance/*'
+    path  min_coelution,  stageAs: 'coelution/*'
     val   route
 
     output:
@@ -40,7 +41,9 @@ process FINALIZE_QUANT {
     def label_json = groovy.json.JsonOutput.toJson(_aug)
     def mod_tol    = params.mod_mass_tolerance
     """
-    python3 - <<'PY' > finalize_quant.log 2>&1
+    set -o pipefail
+
+    python3 - <<'PY' 2>&1 | tee finalize_quant.log
     import csv, os, sys, glob, json, re
 
     BASE    = "${base_long}"
@@ -52,7 +55,9 @@ process FINALIZE_QUANT {
     TOLS    = [p for p in glob.glob('tolerance/*') if os.path.basename(p) != 'NO_FILE']
     TOL     = (float(list(csv.DictReader(open(TOLS[0]), delimiter='\\t'))[0]['tolerance_seconds'])
                if TOLS else 0.0)
-    MIN_COEL = float("${params.pair_min_coelution}")
+    COELS   = [p for p in glob.glob('coelution/*') if os.path.basename(p) != 'NO_FILE']
+    MIN_COEL = (float(list(csv.DictReader(open(COELS[0]), delimiter='\\t'))[0]['min_coelution']) if COELS
+                else float("${params.pair_min_coelution}") if "${params.pair_min_coelution}" != 'auto' else 0.7)
     MIN_IDS = int("${params.search_min_reference_ids}")
     warnings = []
     refs    = [p for p in glob.glob('ref/*') if os.path.basename(p) != 'NO_FILE']
@@ -95,6 +100,17 @@ process FINALIZE_QUANT {
             except ValueError: continue
             if any(abs(v - d) <= MTOL for d in _deltas): return 'heavy'
         return 'light'
+
+    _mod_re = re.compile(r'\\[([^\\]]*)\\]|\\(([^)]*)\\)')
+    def form_of(pf):
+        def one(m):
+            text = (m.group(1) if m.group(1) is not None else m.group(2)).strip()
+            try:
+                v = float(text)
+            except ValueError:
+                return '' if _acc_re and _acc_re.fullmatch(text) else m.group(0)
+            return '' if any(abs(v - d) <= MTOL for d in _deltas) else '[%+.1f]' % v
+        return _mod_re.sub(one, unflank(pf)).strip('.')
 
     def num(v):
         v = (v or '').strip()
@@ -152,11 +168,11 @@ process FINALIZE_QUANT {
         for r in ref_rows:
             cmp_ = (r.get(pcol) or '').strip()
             if not cmp_: continue
-            key = (strip_mods(cmp_), channel_of(cmp_))
+            key = (form_of(cmp_), channel_of(cmp_))
             if dcol and (r.get(dcol) or '').strip().lower() in ('true', '1', 'yes', 'decoy'):
                 decoys.add(key)
             else:
-                targets.setdefault(key, (unflank(cmp_), charge(r.get(zcol)) if zcol else ''))
+                targets.setdefault(key, {}).setdefault(charge(r.get(zcol)) if zcol else '', unflank(cmp_))
         print("reference list: %s -> %d reference peptides (peptide, channel), %d decoys"
               % (REF, len(targets), len(decoys)), file=sys.stderr)
     from_list = bool(targets)
@@ -175,9 +191,10 @@ process FINALIZE_QUANT {
     for r in rows:
         pf   = r.get('peptidoform') or r.get('peptide') or ''
         pep  = strip_mods(pf)
+        form = form_of(pf)
         ch   = (r.get('channel') or '').strip() or channel_of(pf)
         q    = num(r.get('id_qvalue'))
-        key  = (pep, ch)
+        key  = (form, ch)
         dec  = (r.get('is_decoy') or '').strip().lower() in ('true', '1') or \\
                (key in decoys and key not in targets)
         o = {
@@ -197,26 +214,49 @@ process FINALIZE_QUANT {
         o['_best'] = best_peak_group(r)
         o['_shared'] = r.get(SHARED) or ''
         o['_coel'] = r.get('coelution_standard_peak') or ''
+        o['coelution_standard_peak'] = o['_coel']
+        o['_form'] = form
         out.append(o)
+
+    RTQ = 'rt_%s_seconds' % PRIMARY
+    if not any(o.get(RTQ) for o in out):
+        RTQ = 'rt_apex_seconds'
+    heavy_rt = {(o['sample_id'], o['_form'], o['charge']): num(o.get(RTQ)) for o in out
+                if o['channel'] == 'heavy' and o['detected'] == 'true'}
+
+    def apart(o):
+        if PRIMARY == 'standard_peak':
+            c = num(o['_coel'])
+            return MIN_COEL > 0 and c is not None and c < MIN_COEL
+        a, b = num(o.get(RTQ)), heavy_rt.get((o['sample_id'], o['_form'], o['charge']))
+        return TOL > 0 and a is not None and b is not None and abs(a - b) > TOL
+
+    n_apart = 0
+    if LABEL:
+        for o in out:
+            if o['channel'] == 'light' and o['detected'] == 'true' and apart(o):
+                o['detected'] = 'false'
+                n_apart += 1
 
     if not targets:
         for o in out:
             if o['detected'] == 'true':
-                targets.setdefault((o['peptide'], o['channel']), (o['peptidoform'], o['charge']))
+                targets.setdefault((o['_form'], o['channel']), {}).setdefault(o['charge'], o['peptidoform'])
         print("no reference list: the reference set is the %d peptide(s) detected at "
               "q <= %g in at least one run" % (len(targets), FDR), file=sys.stderr)
     for o in out:
-        o['in_reference_list'] = 'true' if (o['peptide'], o['channel']) in targets else 'false'
+        o['in_reference_list'] = 'true' if (o['_form'], o['channel']) in targets else 'false'
 
-    seen = {(o['sample_id'], o['peptide'], o['channel']) for o in out}
+    seen = {(o['sample_id'], o['_form'], o['charge'], o['channel']) for o in out}
     added = 0
     for sid in samples:
-        for (pep, ch), (pf, z) in sorted(targets.items()):
-            if (sid, pep, ch) in seen: continue
-            out.append({'sample_id': sid, 'peptide': pep, 'peptidoform': pf, 'charge': z,
-                        'channel': ch, 'detected': 'false', 'is_decoy': 'false',
-                        'in_reference_list': 'true', '_best': True})
-            added += 1
+        for (form, ch), charges in sorted(targets.items()):
+            for z, pf in sorted(charges.items()):
+                if (sid, form, z, ch) in seen: continue
+                out.append({'sample_id': sid, 'peptide': strip_mods(form), 'peptidoform': pf, 'charge': z,
+                            'channel': ch, 'detected': 'false', 'is_decoy': 'false',
+                            'in_reference_list': 'true', '_best': True, '_form': form})
+                added += 1
     print("added %d reference peptide x sample row(s) that no tool reported" % added,
           file=sys.stderr)
 
@@ -240,6 +280,8 @@ process FINALIZE_QUANT {
     if 'diathem' in ran:
         cols += ['consistency', 'n_effective_transitions']
     cols += [c for c in ['rt_apex_seconds'] + ['rt_%s_seconds' % t for t in ran] if has(c)]
+    if 'standard_peak' in ran and has('coelution_standard_peak'):
+        cols += ['coelution_standard_peak']
     full_cols = cols + ['in_reference_list', 'is_decoy'] + \\
                 (['peak_group_rank'] if has('peak_group_rank') else [])
 
@@ -260,15 +302,12 @@ process FINALIZE_QUANT {
 
     write('quant.full.tsv', out, full_cols)
     shown = [o for o in out if o['is_decoy'] != 'true' and o['_best']
-             and o['peptide'] not in heavy_only]
+             and o['_form'] not in heavy_only]
     reference = [o for o in shown if o['in_reference_list'] == 'true']
     confident = [o for o in reference if o['detected'] == 'true']
     write('quant.reference.tsv', reference, cols)
     write('quant.reference.confident.tsv', confident, cols)
 
-    RTQ = 'rt_%s_seconds' % PRIMARY
-    if not has(RTQ):
-        RTQ = 'rt_apex_seconds'
     by_sample = {}
     for o in reference:
         if o['detected'] == 'true':
@@ -277,8 +316,8 @@ process FINALIZE_QUANT {
     def detected_in(sid, peptides):
         det = {}
         for o in by_sample.get(sid, ()):
-            if o['peptide'] in peptides:
-                d = det.setdefault((o['peptide'], o['charge'], o['channel']), [False, None, None, None])
+            if o['_form'] in peptides:
+                d = det.setdefault((o['_form'], o['charge'], o['channel']), [False, None, None, None])
                 if not d[0] and num(o.get('abundance')) not in (None, 0.0):
                     d[0], d[1], d[2], d[3] = True, num(o.get(RTQ)), num(o.get('_shared')), num(o.get('_coel'))
         return det
@@ -290,7 +329,7 @@ process FINALIZE_QUANT {
         a, b = det[(p, z, 'light')][1], det[(p, z, 'heavy')][1]
         return TOL <= 0 or a is None or b is None or abs(a - b) <= TOL
 
-    n_apart, n_ids = 0, []
+    n_ids = []
     with open('quant_summary.tsv', 'w', newline='') as f:
         w = csv.writer(f, delimiter='\\t', lineterminator='\\n')
         if paired:
@@ -307,7 +346,6 @@ process FINALIZE_QUANT {
                 quant = [(p, z) for p, z in pairs
                          if det[(p, z, 'light')][0] and det[(p, z, 'heavy')][0]
                          and 0.0 not in (det[(p, z, 'light')][2], det[(p, z, 'heavy')][2])]
-                n_apart += sum(not co_elute(det, p, z) for p, z in quant)
                 n_ids.append((sid, counts[0] + counts[2]))
                 w.writerow([ROUTE, sid, len(paired)] + counts +
                            [len({p for p, _z in pairs}),
@@ -322,14 +360,14 @@ process FINALIZE_QUANT {
                 w.writerow([ROUTE, sid, len(targets), len(hit), len(quant)])
 
     if paired and PRIMARY == 'standard_peak':
-        print("pairs_quantified: the light following its standard over the standard's peak "
-              "(co-elution >= %g); %d detected and quantified pair(s) that do not follow it not counted"
-              % (MIN_COEL, n_apart) if MIN_COEL > 0 else "pairs_quantified: co-elution not checked",
+        print("light detected: identified at q <= %g and following its standard over the standard's "
+              "peak (co-elution >= %g); %d identified light(s) that do not follow it not detected"
+              % (FDR, MIN_COEL, n_apart) if MIN_COEL > 0 else "light detected: co-elution not checked",
               file=sys.stderr)
     elif paired:
-        print("pairs_quantified: light and heavy peaks (%s) within %g s; %d detected and "
-              "quantified pair(s) further apart not counted" % (RTQ, TOL, n_apart)
-              if TOL > 0 else "pairs_quantified: co-elution not checked", file=sys.stderr)
+        print("light detected: identified at q <= %g with its peak (%s) within %g s of its standard's; "
+              "%d identified light(s) further apart not detected" % (FDR, RTQ, TOL, n_apart)
+              if TOL > 0 else "light detected: co-elution not checked", file=sys.stderr)
     print("wrote quant.full.tsv (%d rows), quant.reference.tsv (%d), quant.reference.confident.tsv (%d) "
           "over %d sample(s)" % (len(out), len(reference), len(confident), len(samples)),
           file=sys.stderr)

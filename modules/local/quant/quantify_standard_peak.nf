@@ -9,11 +9,10 @@ process QUANTIFY_STANDARD_PEAK {
                saveAs: { fn -> fn.endsWith('.standard_peak.tsv') ? fn : null }
 
     input:
-    tuple val(meta), path(run), path(identifications, stageAs: 'ids/*')
+    tuple val(meta), path(run), path(identifications, stageAs: 'ids/*'), val(search_args)
     path  library,   stageAs: 'library/*'
     path  pairs,     stageAs: 'pairs/*'
     val   heavy_label
-    val   search_args
     val   route
 
     output:

@@ -44,7 +44,7 @@ workflow PREPARE_BACKGROUND {
             KOINA_PREDICT(fasta)
             search_lib = KOINA_PREDICT.out.dlib
         }
-        PREPARE_CHROMATOGRAM_LIBRARY(params.background_sheet, search_lib, fasta, 'background')
+        PREPARE_CHROMATOGRAM_LIBRARY(params.background_sheet, search_lib, fasta, 'background', false)
         dlib_ch = PREPARE_CHROMATOGRAM_LIBRARY.out.elib
 
     } else {

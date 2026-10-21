@@ -6,7 +6,7 @@ process SEARCH_DIA {
                mode: params.publish_mode
 
     input:
-    tuple val(meta), path(dia), path(library), path(windows)
+    tuple val(meta), path(dia), path(library), path(windows), val(search_args)
     path  fasta
 
     output:
@@ -29,7 +29,7 @@ process SEARCH_DIA {
         -i ${dia} \\
         -l ${library} \\
         -f ${fasta} \\
-        ${Args.flat(params.dia_search_args)} \\
+        ${Args.flat(search_args)} \\
         ${windows.name != 'NO_FILE' ? "-apexWindows ${windows}" : ''} \\
         2>&1 | tee ${meta.id}.search.log
 

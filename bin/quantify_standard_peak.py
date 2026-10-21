@@ -15,9 +15,10 @@ OWN_WINDOW_TOLERANCE = 0.01
 FRAGMENTS = 12
 MIN_FRAGMENTS = 3
 PEAK_FLOOR = 0.1
-MAX_HALF = 30.0
+MAX_HALF_WIDTHS = 2.5
 MIN_SHARE = 0.05
-COELUTION_MARGIN = 10.0
+MARGIN_WIDTHS = 1.0
+NULL_SHIFTS = (-3, -2, 2, 3)
 MASS = re.compile(r'\[([+-]?\d+(?:\.\d+)?)\]')
 ARRAY = re.compile(rb'<binaryDataArray\b.*?</binaryDataArray>', re.S)
 BINARY = re.compile(rb'<binary>(.*?)</binary>', re.S)
@@ -30,7 +31,7 @@ SPECTRUM = re.compile(rb'<spectrum\s')
 PSM = re.compile(r'.*:([\d.]+):(.*)\+(\d+)$')
 COLS = ['sample_id', 'peptide', 'peptidoform', 'charge', 'heavy_mz', 'light_mz', 'status',
         'heavy_q_value', 'apex', 'start', 'stop', 'fragments', 'fragments_dropped', 'light_area',
-        'heavy_area', 'ratio_L_H', 'coelution', 'rdotp', 'light_q_value', 'light_rt']
+        'heavy_area', 'ratio_L_H', 'coelution', 'rdotp', 'light_q_value', 'light_rt', 'coelution_null']
 
 
 def is_label(text, deltas):
@@ -184,16 +185,21 @@ def area(rt, y, lo, hi):
     return ((v[1:] + v[:-1]) / 2 * np.diff(r)[:, None]).sum(0)
 
 
-def measure(Hrt, Hx, Lrt, Lx, apex_index):
+def peak(Hrt, Hx, apex_index, max_half):
     hs = smooth(Hx).sum(1)
     a = apex_index
     for _ in range(3):
         a = max([i for i in (a - 1, a, a + 1) if 0 <= i < len(hs)], key=lambda i: hs[i])
     lo = hi = a
-    while lo > 0 and hs[lo - 1] >= PEAK_FLOOR * hs[a] and Hrt[a] - Hrt[lo - 1] <= MAX_HALF:
+    while lo > 0 and hs[lo - 1] >= PEAK_FLOOR * hs[a] and Hrt[a] - Hrt[lo - 1] <= max_half:
         lo -= 1
-    while hi < len(hs) - 1 and hs[hi + 1] >= PEAK_FLOOR * hs[a] and Hrt[hi + 1] - Hrt[a] <= MAX_HALF:
+    while hi < len(hs) - 1 and hs[hi + 1] >= PEAK_FLOOR * hs[a] and Hrt[hi + 1] - Hrt[a] <= max_half:
         hi += 1
+    return a, lo, hi
+
+
+def measure(Hrt, Hx, Lrt, Lx, apex_index, max_half, width):
+    a, lo, hi = peak(Hrt, Hx, apex_index, max_half)
     t0, t1 = Hrt[lo], Hrt[hi]
     ha, la = area(Hrt, Hx, t0, t1), area(Lrt, Lx, t0, t1)
     out = dict(apex=Hrt[a], start=t0, stop=t1)
@@ -205,14 +211,24 @@ def measure(Hrt, Hx, Lrt, Lx, apex_index):
     r = np.log2((la[keep] + 1) / (ha[keep] + 1))
     good = np.abs(r - np.median(r)) <= 1
     idx = np.flatnonzero(keep)[good] if good.sum() >= MIN_FRAGMENTS else np.flatnonzero(keep)
-    w = (Hrt >= t0 - COELUTION_MARGIN) & (Hrt <= t1 + COELUTION_MARGIN)
+    margin = MARGIN_WIDTHS * width
+    w = (Hrt >= t0 - margin) & (Hrt <= t1 + margin)
     hs_w = smooth(Hx[:, idx]).sum(1)[w]
-    lw = np.interp(Hrt[w], Lrt, smooth(Lx[:, idx]).sum(1))
+    ls = smooth(Lx[:, idx]).sum(1)
+    lw = np.interp(Hrt[w], Lrt, ls)
     co = float(np.corrcoef(lw, hs_w)[0, 1]) if lw.std() > 0 and hs_w.std() > 0 else 0.0
+    null = []
+    for k in NULL_SHIFTS:
+        t = Hrt[w] + k * width
+        if len(t) and t[0] >= Lrt[0] and t[-1] <= Lrt[-1]:
+            v = np.interp(t, Lrt, ls)
+            if v.std() > 0 and hs_w.std() > 0:
+                null.append(float(np.corrcoef(v, hs_w)[0, 1]))
     out.update(status='measured', fragments=len(idx), fragments_dropped=int(keep.sum() - len(idx)),
                light_area=float(la[idx].sum()), heavy_area=float(ha[idx].sum()),
                ratio_L_H=float(la[idx].sum() / ha[idx].sum()), coelution=co,
-               rdotp=cosine(np.sqrt(la[keep]), np.sqrt(ha[keep])))
+               rdotp=cosine(np.sqrt(la[keep]), np.sqrt(ha[keep])),
+               coelution_null=','.join('%.4f' % v for v in null))
     return out
 
 
@@ -279,7 +295,7 @@ def main():
             continue
         c, lo, hi, sec = s
         w = (round(lo, 4), round(hi, 4))
-        windows[w] = (lo, hi)
+        windows[w] = (lo, hi, c)
         hits = [(k, f) for r in (round(c - 0.01, 2), round(c, 2), round(c + 0.01, 2)) for k, f in want.get(r, [])
                 if abs(pairs[k][f]['mz'] - c) <= OWN_WINDOW_TOLERANCE]
         if not hits:
@@ -302,10 +318,9 @@ def main():
 
     def own(mz):
         best = None
-        for k, (lo, hi) in windows.items():
-            cen = (lo + hi) / 2
-            if abs(cen - mz) <= OWN_WINDOW_TOLERANCE and lo <= mz <= hi:
-                rank = (abs(cen - mz), hi - lo)
+        for k, (lo, hi, target) in windows.items():
+            if abs(target - mz) <= OWN_WINDOW_TOLERANCE and lo <= mz <= hi:
+                rank = (abs(target - mz), hi - lo)
                 if best is None or rank < best[0]:
                     best = (rank, k)
         return best[1] if best else None
@@ -316,6 +331,7 @@ def main():
         owners.setdefault(r['window'], set()).add((r['light_form'], r['z'], r['heavy']))
     found = search_results(a.search, deltas)
 
+    todo = []
     for key in sorted(pairs):
         form, z = key
         p = pairs[key]
@@ -344,11 +360,21 @@ def main():
             continue
         Hrt, Hx = np.array([t for t, _ in H]), np.array([v for _, v in H])
         Lrt, Lx = np.array([t for t, _ in L]), np.array([v for _, v in L])
-        row.update(measure(Hrt, Hx, Lrt, Lx, int(np.argmin(np.abs(Hrt - hrt)))))
+        todo.append((row, Hrt, Hx, Lrt, Lx, int(np.argmin(np.abs(Hrt - hrt)))))
         rows.append(row)
+    widths = []
+    for _row, Hrt, Hx, _Lrt, _Lx, i in todo:
+        _a, lo, hi = peak(Hrt, Hx, i, float('inf'))
+        widths.append(Hrt[hi] - Hrt[lo])
+    width = float(np.median(widths)) if widths else float('nan')
+    max_half = MAX_HALF_WIDTHS * width if widths else float('inf')
+    for row, Hrt, Hx, Lrt, Lx, i in todo:
+        row.update(measure(Hrt, Hx, Lrt, Lx, i, max_half, width))
     write(a.out, rows)
     n = sum(1 for r in rows if r.get('status') == 'measured')
-    print(f'{a.sample_id}: {len(pairs)} pairs; measured at the heavy\'s peak {n}')
+    print(f'{a.sample_id}: {len(pairs)} pairs; measured at the heavy\'s peak {n}; the heavies\' median peak '
+          f'width {width:.1f} s, so a peak ends at most {max_half:.1f} s from its apex and co-elution is read '
+          f'{MARGIN_WIDTHS * width:.1f} s either side of it')
     return 0
 
 

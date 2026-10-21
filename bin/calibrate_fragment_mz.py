@@ -331,6 +331,20 @@ def in_reference(refs, modseq, z, pmz, tol=0.01):
     return False
 
 
+def th(a, f, mz):
+    return round(f * a.fragment_tolerance, 12) * (np.asarray(mz, float) * 1e-6 if a.fragment_unit == 'ppm' else 1.0)
+
+
+def tolerance_counts(u, a):
+    edges = np.linspace(0, a.tol, int(round(a.tol / a.tolerance_bin)) + 1)
+    d = np.abs(u[np.isfinite(u)])
+    return edges[1:], np.histogram(d[d <= a.tol], edges)[0]
+
+
+def tol_text(a, f):
+    return '%g %s' % (round(f * a.fragment_tolerance, 12), 'Th' if a.fragment_unit == 'th' else 'ppm')
+
+
 def window_key(target):
     return round(target, 4)
 
@@ -353,7 +367,7 @@ def find_calibrants(run, library, a, log):
         scans.append(m)
     log('pass 1: %d narrow-window MS2 scans (%.0f s)' % (len(scans), time.time() - t0))
     if not scans:
-        return [], {}, []
+        return [], dict(narrow_scans=0), []
     centres = np.array(sorted({window_key(s['target']) for s in scans}))
     refs = read_reference_list(a.reference_list) if a.reference_list else None
     if refs is not None:
@@ -411,8 +425,9 @@ def find_calibrants(run, library, a, log):
         for i in ids:
             t = targets[i]
             fm = np.array([f[0] for f in t['frags'][:a.top_k]])
-            lo = np.searchsorted(mz, fm - a.tol)
-            hi = np.searchsorted(mz, fm + a.tol)
+            d = th(a, a.tol, fm)
+            lo = np.searchsorted(mz, fm - d)
+            hi = np.searchsorted(mz, fm + d)
             inten = np.zeros(len(fm))
             for k in range(len(fm)):
                 if hi[k] > lo[k]:
@@ -479,7 +494,8 @@ def find_calibrants(run, library, a, log):
                 for fmz, lint, lab in t['frags']:
                     if np.isfinite(s['swl']) and (fmz < s['swl'] + 0.5 or fmz > s['swu'] - 0.5):
                         continue
-                    lo, hi = np.searchsorted(mz, fmz - a.tol), np.searchsorted(mz, fmz + a.tol)
+                    d = th(a, a.tol, fmz)
+                    lo, hi = np.searchsorted(mz, fmz - d), np.searchsorted(mz, fmz + d)
                     if hi <= lo:
                         continue
                     jj = lo + int(np.argmax(it[lo:hi]))
@@ -506,11 +522,11 @@ def fit_curve(pts, a, log, use_rt):
     key = np.array(['%s/%d' % (p['modseq'], p['z']) for p in pts])
     r1 = np.abs(e1 - pred)
     per = {k: float(np.median(r1[key == k])) for k in np.unique(key)}
-    bad = {k for k, v in per.items() if v > a.max_target_residual}
+    bad = {k for k, v in per.items() if v > th(a, a.max_target_residual, float(np.median(x[key == k])))}
     stats = dict(targets=len(per), inconsistent=len(bad), share_inconsistent=round(len(bad) / max(1, len(per)), 3),
                  target_median_abs_residual=round(float(np.median(list(per.values()))), 4))
-    log('consistency with the stage-1 curve: %d of %d targets have a median |residual| above %.2f Th (%.0f %%); '
-        'median over targets %.3f Th' % (len(bad), len(per), a.max_target_residual,
+    log('consistency with the stage-1 curve: %d of %d targets have a median |residual| above %s (%.0f %%); '
+        'median over targets %.3f Th' % (len(bad), len(per), tol_text(a, a.max_target_residual),
                                          100 * stats['share_inconsistent'], stats['target_median_abs_residual']))
     e2 = np.full(len(pts), np.nan)
     for i, p in enumerate(pts):
@@ -518,14 +534,14 @@ def fit_curve(pts, a, log, use_rt):
             continue
         want = p['theo'] + pred[i]
         d = np.abs(p['cand_mz'] - want)
-        okc = (d <= a.rematch_tol) & (p['cand_int'] >= 0.2 * p['cand_int'].max())
+        okc = (d <= th(a, a.rematch_tol, p['theo'])) & (p['cand_int'] >= 0.2 * p['cand_int'].max())
         if okc.any():
             k = np.argmin(np.where(okc, d, np.inf))
             e2[i] = p['cand_mz'][k] - p['theo']
             p['obs2'] = p['cand_mz'][k]
     keep = np.isfinite(e2)
-    log('stage 1 (most intense within +/-%.2f): %d errors; stage 2 (nearest to the stage-1 curve within '
-        '+/-%.2f): %d' % (a.tol, len(x), a.rematch_tol, keep.sum()))
+    log('stage 1 (most intense within +/-%s): %d errors; stage 2 (nearest to the stage-1 curve within '
+        '+/-%s): %d' % (tol_text(a, a.tol), len(x), tol_text(a, a.rematch_tol), keep.sum()))
     xk, rk, ek = x[keep], rt[keep], e2[keep]
     f2, _ = lowess_grid(xk, ek, grid, frac=a.frac)
     if not use_rt:
@@ -697,8 +713,12 @@ def main():
     ap.add_argument('--library', required=True, help='.blib, .dlib or .elib holding the targets')
     ap.add_argument('--report', required=True, help='output prefix for .json, .txt, .calibrants.tsv')
     ap.add_argument('--out', help='calibrated mzML (omit to measure only)')
-    ap.add_argument('--tol', type=float, default=0.6, help='fragment tolerance for the search of calibrants (Th)')
-    ap.add_argument('--rematch-tol', type=float, default=0.2, help='tolerance around the stage-1 curve (Th)')
+    ap.add_argument('--fragment-tolerance', type=float, default=0.4, help="the search's fragment tolerance")
+    ap.add_argument('--fragment-unit', choices=('th', 'ppm'), default='th')
+    ap.add_argument('--tol', type=float, default=1.5,
+                    help='fragment tolerance for the search of calibrants, in fragment tolerances')
+    ap.add_argument('--rematch-tol', type=float, default=0.5,
+                    help='tolerance around the stage-1 curve, in fragment tolerances')
     ap.add_argument('--center-tol', type=float, default=0.05, help='precursor to window centre (Th)')
     ap.add_argument('--max-window-width', type=float, default=4.0, help='wider isolation windows are ignored (Th)')
     ap.add_argument('--annot-tol', type=float, default=0.02, help='library peak to b/y ion (Th)')
@@ -707,8 +727,9 @@ def main():
     ap.add_argument('--min-cos', type=float, default=0.7, help='library correlation at the apex')
     ap.add_argument('--min-cos-neighbour', type=float, default=0.5, help='library correlation of apex candidates')
     ap.add_argument('--min-xic', type=float, default=0.7, help='fragment co-elution around the apex')
-    ap.add_argument('--max-target-residual', type=float, default=0.15,
-                    help='a target whose fragments are off the stage-1 curve by more than this (median, Th) is dropped')
+    ap.add_argument('--max-target-residual', type=float, default=0.375,
+                    help='a target whose fragments are off the stage-1 curve by more than this (median, in fragment '
+                         'tolerances) is dropped')
     ap.add_argument('--max-share-inconsistent', type=float, default=0.3,
                     help='more dropped targets than this share: the run is not calibrated')
     ap.add_argument('--min-peak-ratio', type=float, default=3.0,
@@ -722,10 +743,14 @@ def main():
     ap.add_argument('--rt-min-targets', type=int, default=50, help='fewer targets: m/z term only')
     ap.add_argument('--rt-frac', type=float, default=0.3)
     ap.add_argument('--rt-grid-step', type=float, default=30.0)
-    ap.add_argument('--min-offset', type=float, default=0.1,
-                    help='correct only when the largest offset of the m/z curve is above this (Th); 0: always')
+    ap.add_argument('--min-offset', default='auto',
+                    help='correct only when the largest offset of the m/z curve is above this (Th); 0: always; '
+                         'auto: a quarter of the fragment tolerance')
     ap.add_argument('--measure-only', action='store_true',
                     help='measure and report, locate the targets, but never correct (the run passes as a link)')
+    ap.add_argument('--tolerance-counts', help="the calibrants' fragment errors the search will see, as counts by "
+                    "absolute error in fragment tolerances, for the search tolerance")
+    ap.add_argument('--tolerance-bin', type=float, default=0.0125, help='bin of those counts, in fragment tolerances')
     ap.add_argument('--min-targets', type=int, default=20)
     ap.add_argument('--min-points', type=int, default=150)
     ap.add_argument('--windows', help="REMOVE_SURVEY_SCANS's isolation-window table: a run without narrow "
@@ -771,9 +796,9 @@ def finish(a, report, status, corrected):
     if a.warnings:
         with open(a.warnings, 'w') as fh:
             if corrected:
-                fh.write('%s: fragment m/z read up to %+.2f Th off; corrected (qc/fragment_mz_calibration.tsv). '
+                fh.write('%s: fragment m/z read up to %+.2f Th off; corrected (qc/%s/). '
                          'The instrument\'s calibration for this scan type may need attention\n'
-                         % (sid, report['largest_offset_signed_th']))
+                         % (sid, report['largest_offset_signed_th'], sid))
             elif status.startswith('not calibrated: the calibrants disagree'):
                 fh.write('%s: fragment m/z not calibrated, %s\n' % (sid, status[len('not calibrated: '):]))
 
@@ -818,6 +843,9 @@ def run(a):
     log('%s: fragment m/z calibration' % name)
     t0 = time.time()
     pts, info, tstats = find_calibrants(a.run, a.library, a, log)
+    if not info['narrow_scans']:
+        return passthrough(a, 'not applicable: no isolation window narrower than %g Th (DIA)'
+                           % a.max_window_width, dict(run=name))
     if tstats:
         cols = ['modseq', 'z', 'prec', 'scans', 'used', 'apex_rt', 'r_lib', 'xic_corr', 'n_frags', 'apex_intensity',
                 'peak_ratio']
@@ -828,7 +856,7 @@ def run(a):
     report = dict(run=name, library=os.path.basename(a.library), settings={k: v for k, v in vars(a).items()},
                   **info, calibrant_errors=len(pts))
     status = 'calibrated'
-    curve = None
+    curve = fitted = None
     if len(pts) == 0 or info.get('targets_with_apex', 0) < a.min_targets or len(pts) < a.min_points:
         status = 'not calibrated: too few calibrants (%d targets, %d fragment errors; need %d and %d)' % (
             info.get('targets_with_apex', 0), len(pts), a.min_targets, a.min_points)
@@ -836,6 +864,7 @@ def run(a):
     else:
         use_rt = not a.no_rt_term and info['targets_with_apex'] >= a.rt_min_targets
         curve, e2, c1, cstats = fit_curve(pts, a, log, use_rt)
+        fitted = curve
         report['consistency'] = cstats
         x = np.array([p['theo'] for p in pts])
         rt = np.array([p['rt'] for p in pts])
@@ -877,23 +906,39 @@ def run(a):
         curve = None
     if curve is not None and report['consistency']['share_inconsistent'] > a.max_share_inconsistent:
         status = ('not calibrated: the calibrants disagree (%.0f %% of the targets off the common curve by more '
-                  'than %.2f Th; at most %.0f %% allowed)' % (100 * report['consistency']['share_inconsistent'],
-                                                            a.max_target_residual, 100 * a.max_share_inconsistent))
+                  'than %s; at most %.0f %% allowed)' % (100 * report['consistency']['share_inconsistent'],
+                                                        tol_text(a, a.max_target_residual),
+                                                        100 * a.max_share_inconsistent))
         log(status)
         curve = None
     if curve is not None:
         largest = float(np.abs(curve.mz_off).max())
         report['largest_offset_th'] = round(largest, 4)
         report['largest_offset_signed_th'] = round(float(curve.mz_off[np.argmax(np.abs(curve.mz_off))]), 4)
-        if largest < a.min_offset:
-            status = ('not corrected: the largest offset, %.3f Th, is below --min-offset %.2f Th (the run is '
-                      'well calibrated)' % (largest, a.min_offset))
+        if a.min_offset == 'auto':
+            small = bool((np.abs(curve.mz_off) < th(a, 0.25, curve.mz_grid)).all())
+            limit = '%s, a quarter of the fragment tolerance' % tol_text(a, 0.25)
+        else:
+            small = largest < float(a.min_offset)
+            limit = '%g Th' % float(a.min_offset)
+        if small:
+            status = ('not corrected: the largest offset, %.3f Th, is below %s (the run is well calibrated)'
+                      % (largest, limit))
             log(status)
             curve = None
         elif a.measure_only:
             status = 'not corrected: measured only (largest offset %.3f Th)' % largest
             log(status)
             curve = None
+    if fitted is not None and not status.startswith('not calibrated'):
+        seen = np.array([p['obs'] - p['theo'] for p in pts])
+        if curve is not None:
+            seen = seen - fitted(x, rt)
+        if a.tolerance_counts:
+            upto, n = tolerance_counts(seen / th(a, 1.0, x), a)
+            with open(a.tolerance_counts, 'w') as fh:
+                fh.write('upto_T\terrors\n' + ''.join('%.4f\t%d\n' % (u, c) for u, c in zip(upto, n)))
+            log('fragment errors the search will see, for its tolerance: %d within +/-%s' % (n.sum(), tol_text(a, a.tol)))
     report['status'] = status
     if a.out:
         os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)

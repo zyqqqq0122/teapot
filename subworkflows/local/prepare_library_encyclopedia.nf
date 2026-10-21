@@ -109,7 +109,8 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
 
     def library_ch
     if (params.library_sheet) {
-        PREPARE_CHROMATOGRAM_LIBRARY(params.library_sheet, dlib_ch, fasta, 'chromatogram')
+        PREPARE_CHROMATOGRAM_LIBRARY(params.library_sheet, dlib_ch, fasta, 'chromatogram', true)
+        warn_ch = warn_ch.mix(PREPARE_CHROMATOGRAM_LIBRARY.out.warnings)
         library_ch = PREPARE_CHROMATOGRAM_LIBRARY.out.elib
     } else if (params.elib) {
         library_ch = Channel.value(file(params.elib))

@@ -9,13 +9,14 @@ process CALIBRATE_FRAGMENT_MZ {
                saveAs: { fn -> fn ==~ /.*\.fragment_mz\.(json|txt|targets\.tsv|calibrants\.tsv)/ ? fn : null }
 
     input:
-    tuple val(meta), path(run), path(reference_list), path(windows)
+    tuple val(meta), path(run), path(reference_list), path(windows, stageAs: 'windows/*'), val(fragment)
     path  library, stageAs: 'library/*'
     val   correct
 
     output:
     tuple val(meta), path("calibrated/${run.name}"), path(reference_list), emit: run
     tuple val(meta), path("${meta.id}.fragment_mz.targets.tsv"), optional: true, emit: located
+    tuple val(meta), path("${meta.id}.fragment_mz.tolerance.tsv"), optional: true, emit: tolerance
     path  "${meta.id}.fragment_mz.row.tsv",                                emit: row
     path  "${meta.id}.fragment_mz.warnings.txt",                           emit: warnings
     path  "${meta.id}.fragment_mz.*",                                      emit: report
@@ -23,19 +24,23 @@ process CALIBRATE_FRAGMENT_MZ {
 
     script:
     def ref = reference_list.name != 'NO_FILE' ? "--reference-list ${reference_list}" : ''
+    def win = windows.name.endsWith('NO_FILE') ? '' : "--windows ${windows}"
+    def tol = fragment ? "--fragment-tolerance ${fragment[0]} --fragment-unit ${fragment[1]}" : ''
     """
     # bin/calibrate_fragment_mz.py ${Fingerprint.of("${projectDir}/bin/calibrate_fragment_mz.py")}: a changed script reruns the step
     calibrate_fragment_mz.py \\
         --run        ${run} \\
         --library    ${library} \\
         ${ref} \\
-        --windows    ${windows} \\
+        ${win} \\
+        ${tol} \\
         --min-offset ${params.fragment_mz_calibration_min_offset} \\
         ${correct ? '' : '--measure-only'} \\
         --sample-id  ${meta.id} \\
         --report     ${meta.id}.fragment_mz \\
         --summary    ${meta.id}.fragment_mz.row.tsv \\
         --warnings   ${meta.id}.fragment_mz.warnings.txt \\
+        --tolerance-counts ${meta.id}.fragment_mz.tolerance.tsv \\
         --out        calibrated/${run.name}
 
     cat <<-EOF > versions.yml

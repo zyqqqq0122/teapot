@@ -15,6 +15,7 @@ process QUANTIFY_HEAVY_LIGHT {
     path  fasta, stageAs: 'fasta/*'
     val   heavy_label
     path  tolerance
+    path  min_coelution, stageAs: 'coelution/*'
     val   primary
     val   min_consistency
     val   route
@@ -29,24 +30,39 @@ process QUANTIFY_HEAVY_LIGHT {
     path "versions.yml",                    emit: versions
 
     script:
-    def label_json = groovy.json.JsonOutput.toJson(heavy_label ?: [])
+    def _rows_uni = file("${projectDir}/assets/unimod_delta_masses.tsv").readLines()
+    def _delta_by_acc = [:]
+    _rows_uni.drop(1).each { l ->
+        def c = l.split('\t')
+        if (c.size() >= 3) _delta_by_acc[c[0]] = c[2] as Double
+    }
+    def _aug = (heavy_label ?: []).collect { r ->
+        def d = r.containsKey('delta') ? (r.delta as Double) : _delta_by_acc[r.unimod]
+        [ site: r.site, unimod: r.unimod, delta: d ]
+    }
+    def label_json = groovy.json.JsonOutput.toJson(_aug)
+    def mod_tol    = params.mod_mass_tolerance
     def skip_json  = groovy.json.JsonOutput.toJson(params.complete_channels_skip_proteins ?: [])
     """
+    set -o pipefail
 
-    python3 - <<'PY' > quantify_heavy_light.log 2>&1
-    import pandas as pd, re, sys, json, csv
+    python3 - <<'PY' 2>&1 | tee quantify_heavy_light.log
+    import pandas as pd, re, sys, json, csv, glob, os
 
     BASE      = "${base_long}"
     STD       = "${standard_amounts}"
     FASTA     = "${fasta}"
     LABEL     = json.loads(r'''${label_json}''')
+    MTOL      = float("${mod_tol}")
     PRIMARY   = "${primary}"
     MIN_CONS  = float("${min_consistency}")
     FDR       = float("${params.fdr}")
     SKIP_PROT = json.loads(r'''${skip_json}''')
     TOL       = float(list(csv.DictReader(open('${tolerance}'),
                                         delimiter='\\t'))[0]['tolerance_seconds'])
-    MIN_COEL  = float("${params.pair_min_coelution}")
+    COELS     = [p for p in glob.glob('coelution/*') if os.path.basename(p) != 'NO_FILE']
+    MIN_COEL  = (float(list(csv.DictReader(open(COELS[0]), delimiter='\\t'))[0]['min_coelution']) if COELS
+                 else float("${params.pair_min_coelution}") if "${params.pair_min_coelution}" != 'auto' else 0.7)
 
     heavy_accs = { r["unimod"] for r in LABEL }
     if not heavy_accs:
@@ -97,6 +113,21 @@ process QUANTIFY_HEAVY_LIGHT {
         return s.strip('.')
     base['peptide'] = base['peptidoform'].fillna(base['peptide']).apply(strip)
 
+    _accs   = [r["unimod"] for r in LABEL if r.get("unimod")]
+    _deltas = [float(r["delta"]) for r in LABEL if r.get("delta") is not None]
+    _acc_re = re.compile("|".join(re.escape(a) for a in _accs)) if _accs else None
+    _mod_re = re.compile(r'\\[([^\\]]*)\\]|\\(([^)]*)\\)')
+    def form_of(pf):
+        def one(m):
+            text = (m.group(1) if m.group(1) is not None else m.group(2)).strip()
+            try:
+                v = float(text)
+            except ValueError:
+                return '' if _acc_re and _acc_re.fullmatch(text) else m.group(0)
+            return '' if any(abs(v - d) <= MTOL for d in _deltas) else '[%+.1f]' % v
+        return _mod_re.sub(one, _flank_re.sub('', str(pf).strip())).strip('.')
+    base['form'] = base['peptidoform'].fillna(base['peptide']).apply(form_of)
+
     def in_fasta(path, peptides):
         peptides = {p for p in peptides if p}
         short = {p for p in peptides if len(p) < 5}
@@ -143,7 +174,7 @@ process QUANTIFY_HEAVY_LIGHT {
         rank = pd.to_numeric(base['peak_group_rank'], errors='coerce')
         base = base[rank.isna() | (rank <= 1)]
 
-    pc = ['peptide', 'charge']
+    pc = ['form', 'charge']
     has_std = pd.MultiIndex.from_frame(base[pc]).isin(
         pd.MultiIndex.from_frame(base.loc[base['channel'] == 'heavy', pc]))
     if not has_std.all():
@@ -151,7 +182,7 @@ process QUANTIFY_HEAVY_LIGHT {
               f"with no heavy row in any run: no standard", file=sys.stderr)
     base = base[has_std]
 
-    key = ['sample_id', 'peptide', 'charge']
+    key = ['sample_id', 'peptide', 'form', 'charge']
 
     def rt_col(method):
         c = f'rt_{method}_seconds'
@@ -248,7 +279,8 @@ process QUANTIFY_HEAVY_LIGHT {
     pairs['ratio_L_H'] = light / heavy
     pairs['ratio_H_L'] = heavy / light
     pairs['abs_pmol_light'] = pairs['ratio_L_H'] * pd.to_numeric(pairs['heavy_pmol_known'], errors='coerce')
-    pairs['light_detected'] = pairs['light_q_value'] <= FDR
+    pairs['light_identified'] = pairs['light_q_value'] <= FDR
+    pairs['light_detected'] = pairs['light_identified'] & ~pairs['co_eluting'].eq(False).fillna(False).astype(bool)
     pairs['heavy_detected'] = pairs['heavy_q_value'] <= FDR
 
     def status(r):
@@ -289,7 +321,8 @@ process QUANTIFY_HEAVY_LIGHT {
             "Refusing to emit an all-blank absolute-quant table silently."
         )
 
-    cols = ['sample_id', 'method', 'protein', 'peptide', 'charge', 'status', 'confident',
+    pairs = pairs.rename(columns={'form': 'peptidoform'})
+    cols = ['sample_id', 'method', 'protein', 'peptide', 'peptidoform', 'charge', 'status', 'confident',
             'light_abundance', 'heavy_abundance', 'ratio_L_H', 'ratio_H_L',
             'heavy_pmol_known', 'abs_pmol_light',
             'light_q_value', 'heavy_q_value', 'light_detected', 'heavy_detected',
@@ -299,16 +332,17 @@ process QUANTIFY_HEAVY_LIGHT {
         cols = [c for c in cols if not c.endswith('_consistency')]
     if 'standard_peak' not in methods:
         cols = [c for c in cols if c != 'coelution']
-    pairs = pairs[cols].sort_values(['method', 'sample_id', 'protein', 'peptide', 'charge'])
-    pairs.to_csv("peptide.abs_quant.tsv", sep='\\t', index=False)
+    pairs = pairs[cols + ['light_identified']].sort_values(['method', 'sample_id', 'protein', 'peptide',
+                                                            'peptidoform', 'charge'])
+    pairs[cols].to_csv("peptide.abs_quant.tsv", sep='\\t', index=False)
 
-    conf = pairs[pairs['confident']].drop(columns=[c for c in ('method', 'status', 'confident', 'light_detected',
-                                                               'heavy_detected', 'coelution', 'co_eluting')
+    conf = pairs[pairs['confident']][cols].drop(columns=[c for c in ('method', 'status', 'confident', 'light_detected',
+                                                                     'heavy_detected', 'coelution', 'co_eluting')
                                                    if c in pairs.columns])
     conf.to_csv("peptide.abs_quant.confident.tsv", sep='\\t', index=False)
 
     amounts = conf.dropna(subset=['abs_pmol_light'])
-    amounts.pivot_table(index=['protein', 'peptide', 'charge'], columns='sample_id',
+    amounts.pivot_table(index=['protein', 'peptide', 'peptidoform', 'charge'], columns='sample_id',
                         values='abs_pmol_light', aggfunc='first') \\
         .reset_index().to_csv("peptide.abs_quant.matrix.tsv", sep='\\t', index=False)
 
@@ -320,23 +354,26 @@ process QUANTIFY_HEAVY_LIGHT {
                 .reset_index()
                 .to_csv("protein.abs_quant.tsv", sep='\\t', index=False))
 
-    print(f"light/heavy pairs per tool (q <= {FDR} on both channels = detected):", file=sys.stderr)
+    print(f"light/heavy pairs per tool (q <= {FDR} on both channels = identified; a light co-eluting "
+          f"with its standard as well = detected):", file=sys.stderr)
     for m, g in pairs.groupby('method'):
         q = g[g['status'] == 'both_quantified']
+        i = q[q['light_identified'] & q['heavy_detected']]
         d = q[q['light_detected'] & q['heavy_detected']]
         mark = '  <- primary_abundance: confident table, matrix, protein amounts' if m == PRIMARY else ''
         print(f"  {m:14} {q['peptide'].nunique():4} peptides with both channels quantified, "
-              f"{d['peptide'].nunique():4} with both detected{mark}", file=sys.stderr)
+              f"{i['peptide'].nunique():4} with both identified, {d['peptide'].nunique():4} with both "
+              f"detected{mark}", file=sys.stderr)
         if m == 'standard_peak' and MIN_COEL > 0:
-            print(f"  {'':14} detected pair rows: {len(d)}; the light following its standard over the "
-                  f"standard's peak (co-elution >= {MIN_COEL:g}): {int(d['co_eluting'].eq(True).sum())}, "
-                  f"not following it: {int(d['co_eluting'].eq(False).sum())}, not measured: "
-                  f"{int(d['co_eluting'].isna().sum())}", file=sys.stderr)
+            print(f"  {'':14} identified pair rows: {len(i)}; the light following its standard over the "
+                  f"standard's peak (co-elution >= {MIN_COEL:g}): {int(i['co_eluting'].eq(True).sum())}, "
+                  f"not following it: {int(i['co_eluting'].eq(False).sum())}, not measured: "
+                  f"{int(i['co_eluting'].isna().sum())}", file=sys.stderr)
         elif m != 'standard_peak' and TOL > 0:
-            print(f"  {'':14} detected pair rows: {len(d)}; light and heavy peaks within "
-                  f"{TOL:g} s: {int(d['co_eluting'].eq(True).sum())}, further apart: "
-                  f"{int(d['co_eluting'].eq(False).sum())}, no retention time: "
-                  f"{int(d['co_eluting'].isna().sum())}", file=sys.stderr)
+            print(f"  {'':14} identified pair rows: {len(i)}; light and heavy peaks within "
+                  f"{TOL:g} s: {int(i['co_eluting'].eq(True).sum())}, further apart: "
+                  f"{int(i['co_eluting'].eq(False).sum())}, no retention time: "
+                  f"{int(i['co_eluting'].isna().sum())}", file=sys.stderr)
     if TOL <= 0 and any(m != 'standard_peak' for m in methods):
         print("co-elution of light and heavy peaks not checked (pair_rt_tolerance_seconds 0)",
               file=sys.stderr)

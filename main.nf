@@ -56,7 +56,9 @@ def helpMessage() {
       --pair_min_coelution  SIL runs measured with standard_peak: a light/heavy pair
                             counts only when the light's signal follows its
                             standard's over the standard's peak, their correlation
-                            at least this (default 0.7); 0 = off
+                            at least this. auto (the default): the correlation 1 in
+                            20 light signals reach when moved away from their
+                            standard; a number from 0 to 1; 0 = off
       --pair_rt_tolerance_seconds
                             SIL runs, the other tools: a light/heavy pair whose two
                             peaks lie further apart than this many seconds does not
@@ -65,8 +67,12 @@ def helpMessage() {
       --fragment_mz_calibration
                             targeted runs: measure each run's fragment m/z error on
                             its own targets and correct it when larger than
-                            fragment_mz_calibration_min_offset (0.1 Th): auto (the
-                            default) or off
+                            fragment_mz_calibration_min_offset (auto: a quarter of
+                            the search's fragment tolerance): auto (the default) or off
+      --search_tolerance    targeted runs on the EncyclopeDIA routes: search at the
+                            fragment tolerance the runs' own targets show after the
+                            correction, all runs together, instead of -ftol: auto
+                            (the default) or off
       --rt_alignment        SIL runs on the EncyclopeDIA routes: align the runs on
                             their heavy standards and search each peptide only
                             where it elutes in that run: auto (the default) or off
@@ -199,21 +205,31 @@ workflow {
     if (Args.mode(params.rt_alignment) == null) {
         error "rt_alignment must be auto or off, got '${params.rt_alignment}'."
     }
+    if (Args.mode(params.search_tolerance) == null) {
+        error "search_tolerance must be auto or off, got '${params.search_tolerance}'."
+    }
     def half = params.rt_alignment_half_window_seconds as String
     if (!(half == 'auto' || (half.isNumber() && (half as double) > 0))) {
         error "rt_alignment_half_window_seconds must be auto or a number of seconds above 0, got '${half}'."
     }
     def cal_min = params.fragment_mz_calibration_min_offset as String
-    if (!(cal_min.isNumber() && (cal_min as double) >= 0)) {
-        error "fragment_mz_calibration_min_offset must be a number of Th (0 or more), got '${cal_min}'."
+    if (!(cal_min == 'auto' || (cal_min.isNumber() && (cal_min as double) >= 0))) {
+        error "fragment_mz_calibration_min_offset must be auto or a number of Th (0 or more), got '${cal_min}'."
     }
+    def enc_quant_mode = params.encyclopedia_quant in [true, 'true', 'on'] ? 'on' :
+                         params.encyclopedia_quant in [false, 'false', 'off'] ? 'off' :
+                         params.encyclopedia_quant == 'auto' ? 'auto' : null
+    if (enc_quant_mode == null) {
+        error "encyclopedia_quant must be auto, on or off, got '${params.encyclopedia_quant}'."
+    }
+    def enc_quant = enc_quant_mode == 'on' || (enc_quant_mode == 'auto' && params.primary_abundance == 'encyclopedia')
     def tol = params.pair_rt_tolerance_seconds as String
     if (!(tol == 'auto' || (tol.isNumber() && (tol as double) >= 0))) {
         error "pair_rt_tolerance_seconds must be auto or a number of seconds (0 = off), got '${tol}'."
     }
     def coel = params.pair_min_coelution as String
-    if (!(coel.isNumber() && (coel as double) >= 0 && (coel as double) <= 1)) {
-        error "pair_min_coelution must be a number from 0 to 1 (0 = off), got '${coel}'."
+    if (!(coel == 'auto' || (coel.isNumber() && (coel as double) >= 0 && (coel as double) <= 1))) {
+        error "pair_min_coelution must be auto or a number from 0 to 1 (0 = off), got '${coel}'."
     }
     if (!((params.background_peptides_top as String).isInteger() && (params.background_peptides_top as int) > 0)) {
         error "background_peptides_top must be a positive whole number, got '${params.background_peptides_top}'."
@@ -432,6 +448,10 @@ workflow {
             default:             return false
         }
     }
+    if (has_enc && !enc_quant && params.primary_abundance == 'encyclopedia') {
+        error "Pre-flight: encyclopedia_quant is off, but primary_abundance is encyclopedia, whose amounts it " +
+              "gives. Set encyclopedia_quant to auto, or choose another primary_abundance."
+    }
     def no_primary = routes.findAll { r -> !gives_primary(r[0], r[1]) }
     if (no_primary) {
         error """
@@ -454,9 +474,11 @@ workflow {
         if (n < params.quant_min_runs) {
             def msg = "quantification cohort for ${route[0]}/${route[1]} is ${n} " +
                       "run(s), below quant_min_runs=${params.quant_min_runs}. " +
-                      "Cross-run quantification (EncyclopeDIA RT alignment, " +
-                      "diathem consistency, pyprophet, TRIC) is unreliable at " +
-                      "this cohort size; identifications are unaffected."
+                      "Each SIL run's retention times are aligned to the other runs there " +
+                      "are instead of the 4 acquired nearest in time, a single run is " +
+                      "searched without retention-time windows, and cross-run quantification " +
+                      "(EncyclopeDIA, diathem consistency, pyprophet, TRIC) is less reliable " +
+                      "at this cohort size; identifications and per-run amounts are still reported."
             if (params.quant_require_min_runs) {
                 error """
                     Pre-flight: ${msg}
@@ -531,12 +553,17 @@ workflow {
     def rt_on = Args.mode(params.rt_alignment) == 'auto'
     def located  = Channel.empty()
     def acquired = Channel.empty()
+    def fragment_errors = Channel.empty()
     if ((mz_on || rt_on) && calibration_library) {
-        CALIBRATE_FRAGMENT_MZ(REMOVE_SURVEY_SCANS.out.run.join(REMOVE_SURVEY_SCANS.out.windows),
+        def fragment_of = { meta -> meta.engine == 'openswath' ? [] :
+            Args.fragmentTolerance(meta.mode == 'DIA' ? params.dia_search_args : params.context_search_args) }
+        CALIBRATE_FRAGMENT_MZ(REMOVE_SURVEY_SCANS.out.run.join(REMOVE_SURVEY_SCANS.out.windows)
+                                  .map { meta, f, rl, w -> tuple(meta, f, rl, w, fragment_of(meta)) },
                               file(calibration_library), mz_on)
         runs_ready = CALIBRATE_FRAGMENT_MZ.out.run
         located    = CALIBRATE_FRAGMENT_MZ.out.located
         acquired   = CALIBRATE_FRAGMENT_MZ.out.row
+        fragment_errors = CALIBRATE_FRAGMENT_MZ.out.tolerance
         CALIBRATE_FRAGMENT_MZ.out.row
             .collectFile(name: 'fragment_mz_calibration.tsv', storeDir: "${params.outdir}/qc",
                          keepHeader: true, skip: 1, sort: true)
@@ -621,7 +648,8 @@ workflow {
             }
             ENCYCLOPEDIA_PRM(enc_prm_samples, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                          diathem_lib_ch, standard_amts_ch, params.heavy_label,
-                         enc_prm_targets, no_file, diathem_ok_enc_prm, located, acquired, rt_ready)
+                         enc_prm_targets, no_file, diathem_ok_enc_prm, located, acquired, fragment_errors,
+                         rt_ready, enc_quant)
             warning_chs << ENCYCLOPEDIA_PRM.out.warnings
         }
 
@@ -635,7 +663,7 @@ workflow {
             ENCYCLOPEDIA_DIA(by_route.enc_dia, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                          diathem_lib_ch, standard_amts_ch, params.heavy_label,
                          enc_dia_targets, enc_dia_has_reference_list, no_file,
-                         diathem_ok_enc_dia, located, acquired, rt_ready)
+                         diathem_ok_enc_dia, located, acquired, fragment_errors, rt_ready, enc_quant)
             warning_chs << ENCYCLOPEDIA_DIA.out.warnings
         }
     }

@@ -188,7 +188,8 @@ workflow PREPARE_LIBRARY_OPENSWATH {
                     error "PREPARE_LIBRARY_OPENSWATH: --library_sheet needs a library to search " +
                           "its runs with: --dlib, or --use_koina to predict one from --fasta."
                 }
-                PREPARE_CHROMATOGRAM_LIBRARY(params.library_sheet, seed_ch, fasta, 'chromatogram_osw')
+                PREPARE_CHROMATOGRAM_LIBRARY(params.library_sheet, seed_ch, fasta, 'chromatogram_osw', true)
+                warn_ch = warn_ch.mix(PREPARE_CHROMATOGRAM_LIBRARY.out.warnings)
                 src_lib_ch = PREPARE_CHROMATOGRAM_LIBRARY.out.elib
 
             } else if (params.elib) {

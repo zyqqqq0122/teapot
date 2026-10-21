@@ -78,10 +78,10 @@ workflow OPENSWATH_DIA {
     def tolerance_ch = Channel.value(no_file)
     if ((heavy_label as List)?.size() > 0) {
         DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_OPENSWATH_DIA.out.long, 'osw_dia')
-        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_dia', params.primary_abundance, params.pair_min_coelution) }
+        DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_dia') }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }
-    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, fasta, heavy_label, tolerance_ch, 'osw_dia')
+    FINALIZE_QUANT(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, fasta, heavy_label, tolerance_ch, no_file, 'osw_dia')
     def warn_ch = FINALIZE_QUANT.out.warnings
         .flatMap { Warnings.inFile(it, 'osw_dia') }
 
@@ -89,7 +89,7 @@ workflow OPENSWATH_DIA {
                  standard_amounts.name != 'NO_FILE'
     if (do_abs) {
         QUANTIFY_HEAVY_LIGHT(MERGE_QUANT_OPENSWATH_DIA.out.long, standard_amounts, fasta,
-                          heavy_label, tolerance_ch, params.primary_abundance,
+                          heavy_label, tolerance_ch, no_file, params.primary_abundance,
                           params.min_consistency, 'osw_dia')
         warn_ch = warn_ch.mix(QUANTIFY_HEAVY_LIGHT.out.warnings
                                     .flatMap { Warnings.inFile(it, 'osw_dia') })

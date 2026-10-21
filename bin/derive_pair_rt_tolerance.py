@@ -28,17 +28,20 @@ def main():
     if setting.lower() != 'auto':
         tol, source = float(setting), 'set by pair_rt_tolerance_seconds'
     else:
-        tool = 'encyclopedia' if a.primary == 'standard_peak' else a.primary
-        wcol, acol = f'width_{tool}_seconds', f'abundance_{tool}'
-        widths = []
         with open(a.base) as f:
-            for r in csv.DictReader(f, delimiter='\t'):
+            rows = list(csv.DictReader(f, delimiter='\t'))
+        for tool in (['encyclopedia', 'standard_peak'] if a.primary == 'standard_peak' else [a.primary]):
+            wcol, acol = f'width_{tool}_seconds', f'abundance_{tool}'
+            widths = []
+            for r in rows:
                 q, w, ab = num(r.get('id_qvalue')), num(r.get(wcol)), num(r.get(acol))
                 rank = num(r.get('peak_group_rank'))
                 if (r.get('channel') == 'heavy' and q is not None and q <= a.fdr
                         and (rank is None or rank <= 1)
                         and w and w > 0 and ab and ab > 0):
                     widths.append(w)
+            if len(widths) >= MIN_PEAKS:
+                break
         if len(widths) >= MIN_PEAKS:
             median = statistics.median(widths)
             tol = round(median / 2, 2)

@@ -9,7 +9,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
 
     input:
     path peptides_tsv, stageAs: 'peptides/*'
-    path elib
+    path elib, stageAs: 'elib/*'
     path enc_targets, stageAs: 'enc/*'
     path diathem_tsv
     path standard_peak, stageAs: 'standard_peak/*'
@@ -37,8 +37,9 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
     def label_json = groovy.json.JsonOutput.toJson(_aug)
     def mod_tol    = params.mod_mass_tolerance
     """
+    set -o pipefail
 
-    python3 - <<'PY' > merge_quant.log 2>&1
+    python3 - <<'PY' 2>&1 | tee merge_quant.log
     import pandas as pd, numpy as np, glob, os, re, json, sys, functools, zlib
 
     PEP_TSV    = "${peptides_tsv}"
@@ -80,6 +81,17 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
                         return True
         return False
     channel_of = lambda p: 'heavy' if is_heavy(p) else 'light'
+
+    _mod_re = re.compile(r'\\[([^\\]]*)\\]|\\(([^)]*)\\)')
+    def form_of(peptidoform):
+        def one(m):
+            text = (m.group(1) if m.group(1) is not None else m.group(2)).strip()
+            try:
+                v = float(text)
+            except ValueError:
+                return '' if _acc_re and _acc_re.fullmatch(text) else m.group(0)
+            return '' if any(abs(v - d) <= MTOL for d in _deltas) else '[%+.1f]' % v
+        return _mod_re.sub(one, _flank_re.sub('', str(peptidoform).strip())).strip('.')
 
     _psm_chg_re = re.compile(r'\\+(\\d+)\\s*\$')
     def charge_from_psmid(v):
@@ -147,7 +159,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         val = pd.Series(float('nan'), index=top.index)
         rows = {}
         for r in top.itertuples():
-            rows.setdefault((r.sample_id, r.stripped_seq, r.charge), {})[r.channel] = r
+            rows.setdefault((r.sample_id, r.form, r.charge), {})[r.channel] = r
         n_shared, same, unlabelled, no_ions = [], 0, 0, 0
         for ch in rows.values():
             l, h = ch.get('light'), ch.get('heavy')
@@ -182,6 +194,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         return top[keys].assign(**{SHARED: val})
 
     quant_rows = []
+    pep2prot = {}
     _elib_ok = os.path.exists(ELIB) and os.path.getsize(ELIB)
     if not _elib_ok and os.path.basename(PEP_TSV) != 'NO_FILE' and os.path.getsize(PEP_TSV):
         w = pd.read_csv(PEP_TSV, sep='\\t')
@@ -192,11 +205,11 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             sub = w[meta_cols + [c]].rename(columns={c: 'abundance_encyclopedia'})
             sub['sample_id']    = sid
             sub['peptidoform']  = sub.get('Peptide', '')
-            sub['stripped_seq'] = sub.get('Peptide', '').astype(str).apply(strip_mods)
+            sub['form']         = sub.get('Peptide', '').astype(str).apply(form_of)
             sub['protein']      = sub.get('Protein', '').astype(str).apply(dedupe_accessions)
             sub['charge']       = 0
             sub['channel']      = sub['peptidoform'].apply(channel_of)
-            quant_rows.append(sub[['sample_id','peptidoform','stripped_seq','charge',
+            quant_rows.append(sub[['sample_id','peptidoform','form','charge',
                                     'channel','protein','abundance_encyclopedia']])
     if not quant_rows and _elib_ok:
         import sqlite3
@@ -217,12 +230,12 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             con.close()
         if not pq.empty:
             pq['peptidoform']  = pq['PeptideModSeq'].astype(str)
-            pq['stripped_seq'] = pq['peptidoform'].apply(strip_mods)
+            pq['form']         = pq['peptidoform'].apply(form_of)
             pq['channel']      = pq['peptidoform'].apply(channel_of)
             pq['sample_id']    = pq['SourceFile'].astype(str).apply(sid_from_path)
             pq = pq.rename(columns={'TotalIntensity': 'abundance_encyclopedia'})
             pq['charge'] = pd.to_numeric(pq['PrecursorCharge'], errors='coerce').fillna(0).astype(int)
-            keys = ['sample_id','stripped_seq','channel','charge']
+            keys = ['sample_id','form','channel','charge']
             enc_fb = (pq.groupby(keys, as_index=False)
                         .agg(abundance_encyclopedia=('abundance_encyclopedia','max'),
                              peptidoform=('peptidoform','first')))
@@ -233,9 +246,9 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
                                   on=keys, how='left')
             if HAS_HEAVY:
                 enc_fb = enc_fb.merge(shared_ion_abundance(top, keys), on=keys, how='left')
-            enc_fb['protein'] = (enc_fb['stripped_seq'].map(pep2prot).fillna('')
+            enc_fb['protein'] = (enc_fb['form'].apply(strip_mods).map(pep2prot).fillna('')
                                  .apply(dedupe_accessions))
-            quant_rows.append(enc_fb[['sample_id','peptidoform','stripped_seq','charge',
+            quant_rows.append(enc_fb[['sample_id','peptidoform','form','charge',
                                       'channel','protein','abundance_encyclopedia',
                                       'rt_encyclopedia_seconds', 'width_encyclopedia_seconds']
                                      + ([SHARED] if HAS_HEAVY else [])])
@@ -243,7 +256,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
                   f"(charge-resolved)", file=sys.stderr)
 
     enc = pd.concat(quant_rows, ignore_index=True) if quant_rows else pd.DataFrame(
-        columns=['sample_id','peptidoform','stripped_seq','charge','channel',
+        columns=['sample_id','peptidoform','form','charge','channel',
                  'protein','abundance_encyclopedia','rt_encyclopedia_seconds'])
 
     id_rows = []
@@ -266,7 +279,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         id_rows.append(pd.DataFrame({
             'sample_id':    sid,
             'peptidoform':  t[pep].astype(str),
-            'stripped_seq': t[pep].astype(str).apply(strip_mods),
+            'form':         t[pep].astype(str).apply(form_of),
             'charge':       (t[chg].astype(int) if chg
                              else t[psm].apply(charge_from_psmid)),
             'id_qvalue':    t[q] if q else pd.NA,
@@ -274,12 +287,12 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             'rt_apex_seconds': t[psm].apply(rt_from_psmid),
         }).assign(channel=lambda d: d['peptidoform'].apply(channel_of)))
     ids = pd.concat(id_rows, ignore_index=True) if id_rows else pd.DataFrame(
-        columns=['sample_id','peptidoform','stripped_seq','charge','id_qvalue',
+        columns=['sample_id','peptidoform','form','charge','id_qvalue',
                  'id_pep','rt_apex_seconds','channel'])
 
     if os.path.basename(DIA_TSV) == 'NO_FILE' or not os.path.getsize(DIA_TSV):
         dia = pd.DataFrame(columns=['sample_id','peptidoform','charge','channel',
-                                    'stripped_seq','abundance_diathem',
+                                    'form','abundance_diathem',
                                     'consistency','n_effective_transitions',
                                     'rt_diathem_seconds'])
     else:
@@ -289,13 +302,13 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         dia = dia.rename(columns={'run_id': 'sample_id', 'abundance': 'abundance_diathem',
                                   'rt_apex_seconds': 'rt_diathem_seconds'})
         if 'rt_diathem_seconds' not in dia.columns: dia['rt_diathem_seconds'] = pd.NA
-        dia['stripped_seq'] = dia['peptidoform'].apply(strip_mods)
+        dia['form']         = dia['peptidoform'].apply(form_of)
         dia['channel']      = dia['peptidoform'].apply(channel_of)
-        dia = dia[['sample_id','peptidoform','charge','channel','stripped_seq',
+        dia = dia[['sample_id','peptidoform','charge','channel','form',
                    'abundance_diathem','consistency','n_effective_transitions',
                    'rt_diathem_seconds']]
 
-    enc_and_ids = enc.merge(ids, on=['sample_id','stripped_seq','charge','channel'],
+    enc_and_ids = enc.merge(ids, on=['sample_id','form','charge','channel'],
                              how='outer', suffixes=('_enc','_id'))
     if 'peptidoform_id' in enc_and_ids.columns:
         enc_and_ids['peptidoform'] = enc_and_ids['peptidoform_enc'].fillna(
@@ -305,7 +318,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
         enc_and_ids['channel'] = enc_and_ids['peptidoform'].apply(channel_of)
 
     base = enc_and_ids.merge(dia,
-        on=['sample_id','stripped_seq','charge','channel'], how='outer',
+        on=['sample_id','form','charge','channel'], how='outer',
         suffixes=('','_d'))
     if 'peptidoform_d' in base.columns:
         base['peptidoform'] = base['peptidoform'].fillna(base['peptidoform_d'])
@@ -318,20 +331,22 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             continue
         for ch, area in (('light', 'light_area'), ('heavy', 'heavy_area')):
             sp_rows.append(pd.DataFrame({
-                'sample_id': t['sample_id'].astype(str), 'stripped_seq': t['peptide'].astype(str),
+                'sample_id': t['sample_id'].astype(str), 'form': t['peptidoform'].astype(str).apply(form_of),
                 'charge': pd.to_numeric(t['charge'], errors='coerce').astype(int), 'channel': ch,
                 'abundance_standard_peak': pd.to_numeric(t[area], errors='coerce'),
+                'width_standard_peak_seconds': pd.to_numeric(t['stop'], errors='coerce') - pd.to_numeric(t['start'], errors='coerce'),
                 'coelution_standard_peak': pd.to_numeric(t['coelution'], errors='coerce') if ch == 'light' else None,
                 'peptidoform_sp': t['peptidoform'].astype(str) if ch == 'light' else None}))
     if sp_rows:
         sp = pd.concat(sp_rows, ignore_index=True)
         sp['charge'] = sp['charge'].astype(base['charge'].dtype)
-        base = base.merge(sp, on=['sample_id','stripped_seq','charge','channel'], how='outer')
+        base = base.merge(sp, on=['sample_id','form','charge','channel'], how='outer')
         base['peptidoform'] = base['peptidoform'].fillna(base.pop('peptidoform_sp'))
         print(f"standard_peak: {len(sp) // 2} pairs measured over the heavy standard's peak "
               f"in {sp['sample_id'].nunique()} run(s)", file=sys.stderr)
     if 'peptide' not in base.columns:
         base['peptide'] = base['peptidoform']
+    base['stripped_seq'] = base['form'].apply(strip_mods)
 
     if pep2prot:
         _blank = base['protein'].isna() | base['protein'].astype(str).str.strip().eq('')
@@ -340,7 +355,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
     for c in ['abundance_openswath','abundance_diathem','abundance_encyclopedia',
               'abundance_tric','abundance_standard_peak','consistency','n_effective_transitions',
               'rt_apex_seconds','rt_encyclopedia_seconds','rt_diathem_seconds',
-              'width_encyclopedia_seconds','coelution_standard_peak']:
+              'width_encyclopedia_seconds','width_standard_peak_seconds','coelution_standard_peak']:
         if c not in base.columns: base[c] = pd.NA
 
     METHODS = ['encyclopedia','openswath','diathem','tric','standard_peak']
@@ -353,9 +368,9 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
           f"({_n_pri} of {len(base)} rows have a value)", file=sys.stderr)
 
     if HAS_HEAVY:
-        by_key = base.groupby(['sample_id','stripped_seq','charge'])['channel'] \\
+        by_key = base.groupby(['sample_id','form','charge'])['channel'] \\
                      .apply(lambda ch: 'light' in set(ch) and 'heavy' in set(ch))
-        base['calibrated'] = base.set_index(['sample_id','stripped_seq','charge']) \\
+        base['calibrated'] = base.set_index(['sample_id','form','charge']) \\
                                  .index.map(by_key).fillna(False).astype(bool)
     else:
         base['calibrated'] = False
@@ -365,7 +380,7 @@ process MERGE_QUANT_ENCYCLOPEDIA_DIA {
             'abundance_tric','abundance_standard_peak','abundance_primary','abundance_primary_source',
             'consistency','n_effective_transitions','rt_apex_seconds',
             'rt_encyclopedia_seconds','rt_diathem_seconds','width_encyclopedia_seconds',
-            'coelution_standard_peak','id_qvalue','id_pep','calibrated']
+            'width_standard_peak_seconds','coelution_standard_peak','id_qvalue','id_pep','calibrated']
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)
