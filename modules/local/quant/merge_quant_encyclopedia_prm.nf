@@ -375,9 +375,9 @@ process MERGE_QUANT_ENCYCLOPEDIA_PRM {
     cols = [c for c in cols if c in base.columns]
     out = base[cols].sort_values(['sample_id','peptide','charge','channel'])
     out.to_csv(OUT_LONG, sep='\\t', index=False)
+    by_sample = dict(tuple(out.groupby('sample_id', sort=False)))
     for sid in all_sample_ids:
-        grp = out[out['sample_id'] == sid]
-        grp.to_csv(f"{OUT_DIR}/{sid}.base_quant.tsv", sep='\\t', index=False)
+        by_sample.get(sid, out.iloc[0:0]).to_csv(f"{OUT_DIR}/{sid}.base_quant.tsv", sep='\\t', index=False)
 
     print(f"enc rows: {len(enc)}", file=sys.stderr)
     print(f"id rows:  {len(ids)}", file=sys.stderr)
