@@ -20,7 +20,9 @@ process ASSERT_BACKGROUND_ADEQUATE {
 
     script:
     """
-    python3 - <<'PY' > background_adequacy.log 2>&1
+    set -o pipefail
+
+    python3 - <<'PY' 2>&1 | tee background_adequacy.log
     import sqlite3, csv, re, sys
 
     UNION_DLIB      = "${union_dlib}"

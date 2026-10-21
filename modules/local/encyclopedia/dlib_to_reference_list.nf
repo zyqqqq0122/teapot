@@ -20,7 +20,9 @@ process DLIB_TO_REFERENCE_LIST {
     script:
     def keep_rt = (source_kind == 'elib') ? 1 : 0
     """
-    python3 - <<'PY' > ${library.baseName}.reference_list.log 2>&1
+    set -o pipefail
+
+    python3 - <<'PY' 2>&1 | tee ${library.baseName}.reference_list.log
     import sqlite3, csv, sys
 
     LIB     = "${library}"

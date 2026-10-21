@@ -20,7 +20,9 @@ process DLIB_TO_OPENSWATH_TSV {
 
     script:
     """
-    python3 - <<'PY' > ${dlib.baseName}.dlib_to_tsv.log 2>&1
+    set -o pipefail
+
+    python3 - <<'PY' 2>&1 | tee ${dlib.baseName}.dlib_to_tsv.log
     import sqlite3, struct, zlib, re, sys, csv, os
 
     DLIB          = "${dlib}"

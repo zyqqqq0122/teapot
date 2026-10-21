@@ -18,8 +18,9 @@ process SPLIT_OPENSWATH_FEATURES {
 
     script:
     """
+    set -o pipefail
 
-    python3 - <<'PY' > ${meta.id}.split.log 2>&1
+    python3 - <<'PY' 2>&1 | tee ${meta.id}.split.log
     import sqlite3, re, sys, csv
     import pandas as pd
 

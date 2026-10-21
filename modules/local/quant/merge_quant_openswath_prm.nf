@@ -35,8 +35,9 @@ process MERGE_QUANT_OPENSWATH_PRM {
     def label_json = groovy.json.JsonOutput.toJson(_aug)
     def mod_tol    = params.mod_mass_tolerance
     """
+    set -o pipefail
 
-    python3 - <<'PY' > merge_quant.log 2>&1
+    python3 - <<'PY' 2>&1 | tee merge_quant.log
     import pandas as pd, glob, os, re, json, sys
 
     DIA_TSV    = "${diathem_tsv}"

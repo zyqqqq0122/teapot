@@ -23,9 +23,10 @@ process PYPROPHET_TO_PSM {
     export MPLCONFIGDIR=\$PWD/.mplconfig
     export XDG_CACHE_HOME=\$PWD/.cache
     mkdir -p "\$MPLCONFIGDIR" "\$XDG_CACHE_HOME"
+    set -o pipefail
 
 
-    python3 - <<'PY' > ${meta.id}.pyprophet_to_psm.log 2>&1
+    python3 - <<'PY' 2>&1 | tee ${meta.id}.pyprophet_to_psm.log
     import pandas as pd, re, sys
 
     ML  = "${reference_list}"

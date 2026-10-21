@@ -18,7 +18,9 @@ process BLIB_TO_REFERENCE_LIST {
 
     script:
     """
-    python3 - <<'PY' > ${blib.baseName}.reference_list.log 2>&1
+    set -o pipefail
+
+    python3 - <<'PY' 2>&1 | tee ${blib.baseName}.reference_list.log
     import sqlite3, csv, sys
 
     BLIB = "${blib}"

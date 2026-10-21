@@ -17,7 +17,9 @@ process EXTRACT_OPENSWATH_INTENSITY {
 
     script:
     """
-    python3 - <<'PY' > ${meta.id}.extract.log 2>&1
+    set -o pipefail
+
+    python3 - <<'PY' 2>&1 | tee ${meta.id}.extract.log
     import sqlite3, sys, csv, re
 
     OSW = "${osw}"
