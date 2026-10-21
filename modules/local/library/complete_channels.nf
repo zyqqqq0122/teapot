@@ -13,8 +13,8 @@ process COMPLETE_CHANNELS {
 
     output:
     path "${library.baseName}.complete.${library.extension}", emit: library
-    path "complete_channels_qc.tsv",                            emit: qc
-    path "complete_channels.log",                               emit: log
+    path "${library.baseName}.complete_channels_qc.tsv",        emit: qc
+    path "${library.baseName}.complete_channels.log",           emit: log
     path "versions.yml",                                       emit: versions
 
     script:
@@ -47,8 +47,8 @@ process COMPLETE_CHANNELS {
         --coverage-hard-floor ${params.complete_channels_coverage_hard_floor} \\
         --coverage-warn-below ${params.complete_channels_coverage_warn_below} \\
         --skip-proteins '${(params.complete_channels_skip_proteins ?: []).join(',')}' \\
-        --qc complete_channels_qc.tsv \\
-        2>&1 | tee complete_channels.log
+        --qc ${library.baseName}.complete_channels_qc.tsv \\
+        2>&1 | tee ${library.baseName}.complete_channels.log
 
     cat <<-EOF > versions.yml
     "${task.process}":
@@ -60,7 +60,7 @@ process COMPLETE_CHANNELS {
     stub:
     """
     touch ${library.baseName}.complete.${library.extension} \\
-          complete_channels_qc.tsv complete_channels.log
+          ${library.baseName}.complete_channels_qc.tsv ${library.baseName}.complete_channels.log
     echo '"${task.process}": {python: stub}' > versions.yml
     """
 }

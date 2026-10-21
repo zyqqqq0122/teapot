@@ -61,6 +61,28 @@ def parse_modseq(modseq, exact=()):
     return ''.join(stripped_chars), mods, nterm, 0.0
 
 
+def modseq_tokens(modseq):
+    m = re.match(r'^((?:\[[+\-][\d.]+\])*)', modseq)
+    nterm_text, rest = m.group(1), modseq[m.end():]
+    return nterm_text, [(t.group(1), t.group(2)) for t in re.finditer(r'([A-Z])((?:\[[+\-][\d.]+\])*)', rest)]
+
+
+def twin_modseq(source, stripped, old_mods, old_nterm, new_mods, new_nterm, new_cterm, decimals=4):
+    nterm_text, residues = modseq_tokens(source)
+    if ''.join(r for r, _t in residues) != stripped:
+        return build_modseq(stripped, new_mods, new_nterm, new_cterm, decimals)
+
+    def fmt(d):
+        return f"[{d:+.{decimals}f}]" if abs(d) > 0 else ''
+    parts = [nterm_text if abs(new_nterm - old_nterm) <= 1e-9 else fmt(new_nterm)]
+    for i, (res, text) in enumerate(residues, start=1):
+        same = abs(new_mods.get(i, 0.0) - old_mods.get(i, 0.0)) <= 1e-9
+        parts.append(res + (text if same else fmt(new_mods.get(i, 0.0))))
+    if abs(new_cterm) > 0:
+        parts.append(fmt(new_cterm))
+    return ''.join(parts)
+
+
 def build_modseq(stripped, mods, nterm=0.0, cterm=0.0, decimals=4):
     def fmt(d):
         return f"[{d:+.{decimals}f}]"
@@ -394,14 +416,19 @@ def load_blib_accessions(con):
     return m
 
 
+DLIB_KEPT = ('Score', 'RTInSecondsStart', 'RTInSecondsStop', 'IonMobility')
+
+
 def read_dlib_entries(con):
-    cur = con.execute("""
+    have = {r[1] for r in con.execute("PRAGMA table_info(entries)")}
+    kept = [c for c in DLIB_KEPT if c in have]
+    cur = con.execute(f"""
         SELECT PrecursorMz, PrecursorCharge, PeptideModSeq, PeptideSeq,
                RTInSeconds, MassEncodedLength, MassArray,
-               IntensityEncodedLength, IntensityArray
+               IntensityEncodedLength, IntensityArray{''.join(', ' + c for c in kept)}
         FROM entries
     """)
-    for (pmz, z, mseq, seq, rt, mlen, mblob, ilen, iblob) in cur:
+    for (pmz, z, mseq, seq, rt, mlen, mblob, ilen, iblob, *extra) in cur:
         n = mlen // 8
         mzs = list(struct.unpack(f'>{n}d', zlib.decompress(mblob)))
         its = list(struct.unpack(f'>{ilen // 4}f', zlib.decompress(iblob)))
@@ -409,7 +436,20 @@ def read_dlib_entries(con):
             'id': None, 'peptide_seq': seq, 'peptide_mod_seq': mseq,
             'charge': z, 'precursor_mz': pmz, 'num_peaks': n,
             'rt': rt, 'peak_mzs': mzs, 'peak_intens': its,
+            'kept': dict(zip(kept, extra)),
         }
+
+
+def load_dlib_accessions(con):
+    try:
+        rows = con.execute("SELECT PeptideSeq, ProteinAccession FROM peptidetoprotein WHERE isDecoy = 0")
+    except sqlite3.Error:
+        return {}
+    m = defaultdict(set)
+    for seq, acc in rows:
+        if acc:
+            m[seq].add(str(acc))
+    return m
 
 
 def append_dlib_entry(con, entry):
@@ -417,17 +457,18 @@ def append_dlib_entry(con, entry):
     n = len(entry['peak_mzs'])
     mblob = zlib.compress(struct.pack(f'>{n}d', *entry['peak_mzs']))
     iblob = zlib.compress(struct.pack(f'>{n}f', *entry['peak_intens']))
-    cur.execute("""
+    kept = {'Score': 0.0, **(entry.get('kept') or {})}
+    cur.execute(f"""
         INSERT INTO entries
           (PrecursorMz, PrecursorCharge, PeptideModSeq, PeptideSeq,
-           Copies, RTInSeconds, Score,
+           Copies, RTInSeconds,
            MassEncodedLength, MassArray,
-           IntensityEncodedLength, IntensityArray, SourceFile)
-        VALUES (?, ?, ?, ?, 1, ?, 0.0, ?, ?, ?, ?, 'complete_channels')
+           IntensityEncodedLength, IntensityArray, SourceFile{''.join(', ' + c for c in kept)})
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 'complete_channels'{', ?' * len(kept)})
     """, (entry['precursor_mz'], entry['charge'],
           entry['peptide_mod_seq'], entry['peptide_seq'],
           entry.get('rt', 0.0),
-          n * 8, mblob, n * 4, iblob))
+          n * 8, mblob, n * 4, iblob, *kept.values()))
 
 
 def main():
@@ -489,7 +530,7 @@ def main():
         exact = blib_exact_mods(con)
     else:
         proteins_map = None
-        accessions = {}
+        accessions = load_dlib_accessions(con)
         entry_iter = read_dlib_entries(con)
 
         def append(entry):
@@ -528,14 +569,16 @@ def main():
             qc_rows.append((e['peptide_mod_seq'], e['charge'],
                             'parse_fail', 0.0, 0, str(exc)))
             continue
+        source_text = e['peptide_mod_seq']
         if fmt == 'blib' and (abs(printed_nterm - nterm) > 1e-4 or
                               any(abs(printed.get(p, 0.0) - mods.get(p, 0.0)) > 1e-4
                                   for p in set(printed) | set(mods))):
+            source_text = build_modseq(stripped, mods, nterm, cterm)
             con.execute("UPDATE RefSpectra SET peptideModSeq = ? WHERE id = ?",
-                        (build_modseq(stripped, mods, nterm, cterm), e['id']))
+                        (source_text, e['id']))
             counters['written_exactly'] += 1
 
-        entry_accs = accessions.get(e['id'], set())
+        entry_accs = accessions.get(e['id'] if fmt == 'blib' else e['peptide_seq'], set())
         hit = next((pat for pat in skip_proteins
                     if any(pat in acc for acc in entry_accs)), None)
         if hit:
@@ -600,7 +643,8 @@ def main():
         pshift = sum(sd for (_p, sd) in shifts) / e['charge']
         twin = {
             'peptide_seq': stripped,
-            'peptide_mod_seq': build_modseq(stripped, new_mods, new_nterm, new_cterm),
+            'peptide_mod_seq': (build_modseq(stripped, new_mods, new_nterm, new_cterm) if fmt == 'blib' else
+                                twin_modseq(source_text, stripped, mods, nterm, new_mods, new_nterm, new_cterm)),
             'charge': e['charge'],
             'precursor_mz': e['precursor_mz'] + pshift,
             'rt': e['rt'],
@@ -609,6 +653,7 @@ def main():
             'mods': new_mods,
             'source_id': e['id'],
             'file_id': e.get('file_id'),
+            'kept': e.get('kept'),
         }
         append(twin)
         existing_keys.add(twin_key)
