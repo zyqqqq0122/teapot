@@ -174,6 +174,8 @@ def main():
     ap.add_argument('--run', required=True, help='mzML or EncyclopeDIA .dia')
     ap.add_argument('--out', required=True, help='the run without its survey scans, or a link to it')
     ap.add_argument('--table', required=True, help='isolation windows, TSV')
+    ap.add_argument('--table-only', action='store_true',
+                    help='an mzML is passed on as a link: the next step leaves its survey scans out as it writes it')
     a = ap.parse_args()
 
     name = os.path.basename(a.run)
@@ -202,6 +204,9 @@ def main():
           % (len(survey), ', '.join('%g' % w for w in widths), removed, 100 * removed / total))
     if low.endswith('.dia'):
         filter_dia(a.run, a.out, survey)
+    elif a.table_only:
+        print('the fragment m/z step leaves them out as it writes the run')
+        os.symlink(os.path.realpath(a.run), a.out)
     else:
         filter_mzml(a.run, a.out, survey, count_spectra(a.run) - removed)
     return 0

@@ -544,13 +544,13 @@ workflow {
 
     normalized = ext_split.ready.mix(converted)
 
-    REMOVE_SURVEY_SCANS(normalized)
-
-    def warning_chs = []
-    def runs_ready = REMOVE_SURVEY_SCANS.out.run
     def calibration_library = params.blib ?: params.openswath_blib ?: params.elib ?: params.dlib
     def mz_on = Args.mode(params.fragment_mz_calibration) == 'auto'
     def rt_on = Args.mode(params.rt_alignment) == 'auto'
+    REMOVE_SURVEY_SCANS(normalized, ((mz_on || rt_on) && calibration_library) as boolean)
+
+    def warning_chs = []
+    def runs_ready = REMOVE_SURVEY_SCANS.out.run
     def located  = Channel.empty()
     def acquired = Channel.empty()
     def fragment_errors = Channel.empty()

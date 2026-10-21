@@ -19,6 +19,7 @@ process SEARCH_DIA {
 
     script:
     def jar_fp = Fingerprint.of(params.encyclopedia_jar)
+    def converted = dia.name.toLowerCase().endsWith('.dia') ? '' : "${dia.baseName}.dia"
     """
     set -o pipefail
 
@@ -32,6 +33,7 @@ process SEARCH_DIA {
         ${Args.flat(search_args)} \\
         ${windows.name != 'NO_FILE' ? "-apexWindows ${windows}" : ''} \\
         2>&1 | tee ${meta.id}.search.log
+    ${converted ? "rm -f ${converted}" : ''}
 
     if [ "${windows.name}" != "NO_FILE" ] && ! grep -q "Apex windows: read" ${meta.id}.search.log; then
         echo "ERROR: ${meta.id} has retention-time windows (rt_alignment), but the EncyclopeDIA in use does" >&2

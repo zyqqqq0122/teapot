@@ -26,6 +26,8 @@ R_SWU = re.compile(rb'accession="MS:1000500"[^>]*?value="([^"]*)"')
 R_FILTER = re.compile(rb'accession="MS:1000512"[^>]*?value="([^"]*)"')
 R_PREC_IN_FILTER = re.compile(rb'\s[0-9.]+@([a-z]+)[0-9.]*')
 R_RANGE_IN_FILTER = re.compile(rb'\s*\[[^\]]*\]')
+R_INDEX = re.compile(rb'(<spectrum\s[^>]*?\bindex=")(\d+)(")')
+R_COUNT = re.compile(rb'(<spectrumList\s[^>]*?\bcount=")(\d+)(")')
 R_BPMZ = re.compile(rb'(accession="MS:1000504"[^>]*?value=")([^"]*)(")')
 R_LOWMZ = re.compile(rb'(accession="MS:1000528"[^>]*?value=")([^"]*)(")')
 R_HIGHMZ = re.compile(rb'(accession="MS:1000527"[^>]*?value=")([^"]*)(")')
@@ -77,6 +79,14 @@ def scan_meta(block):
 def scan_group(block):
     m = R_FILTER.search(block)
     return R_RANGE_IN_FILTER.sub(b'', R_PREC_IN_FILTER.sub(rb' @\1', m.group(1))).decode() if m else ''
+
+
+def window_bounds(block):
+    t, lo, up = R_TGT.search(block), R_LO.search(block), R_UP.search(block)
+    if not (t and lo and up):
+        return None
+    c = float(t.group(1))
+    return round(c - float(lo.group(1)), 2), round(c + float(up.group(1)), 2)
 
 
 def _array_kind(params):
@@ -657,7 +667,7 @@ def add_processing(header, note):
     return header
 
 
-def write_calibrated(src, dst, curve, note, groups):
+def write_calibrated(src, dst, curve, note, groups, drop=frozenset(), n_drop=0):
     sha = hashlib.sha1()
     os.makedirs(os.path.dirname(dst) or '.', exist_ok=True)
     tmp = dst + '.part'
@@ -670,19 +680,31 @@ def write_calibrated(src, dst, curve, note, groups):
         sha.update(b)
         pos += len(b)
 
-    stats = dict(spectra=0, peaks=0, max_abs_shift=0.0, other_ms2=0)
-    offsets, first, tail = [], True, b''
+    stats = dict(spectra=0, peaks=0, max_abs_shift=0.0, other_ms2=0, dropped=0)
+    offsets, first, tail, index = [], True, b'', 0
     for prefix, block, _off in stream_spectra(src):
         if block is None:
             tail = prefix
             break
         if first:
-            prefix = add_processing(prefix, note)
+            if drop:
+                prefix = R_COUNT.sub(lambda x: x.group(1) + str(int(x.group(2)) - n_drop).encode() + x.group(3),
+                                     prefix, count=1)
+            if curve is not None:
+                prefix = add_processing(prefix, note)
             first = False
         write(prefix)
+        if drop:
+            head = block[:block.find(b'<binaryDataArrayList')]
+            m = R_LVL.search(head)
+            if m and m.group(1) == b'2' and window_bounds(head) in drop:
+                stats['dropped'] += 1
+                continue
+            block = R_INDEX.sub(lambda x: x.group(1) + str(index).encode() + x.group(3), block, count=1)
+            index += 1
         open_tag = block[:block.index(b'>') + 1]
         offsets.append((TAG_ID.search(open_tag).group(1), pos))
-        write(recalibrate_block(block, curve, stats, groups))
+        write(recalibrate_block(block, curve, stats, groups) if curve is not None else block)
     cut = tail.find(b'<indexList')
     if cut < 0:
         write(tail)
@@ -706,6 +728,30 @@ def write_calibrated(src, dst, curve, note, groups):
     out.close()
     os.replace(tmp, dst)
     return stats
+
+
+def survey_windows(path):
+    import csv
+    if not path:
+        return frozenset(), 0
+    with open(path, newline='') as fh:
+        rows = [r for r in csv.DictReader(fh, delimiter='\t') if r.get('survey') == 'yes']
+    return (frozenset((round(float(r['isolation_lower']), 2), round(float(r['isolation_upper']), 2)) for r in rows),
+            sum(int(r['scans']) for r in rows))
+
+
+def as_acquired(a, survey, log=print):
+    drop, n_drop = survey
+    if os.path.lexists(a.out):
+        os.remove(a.out)
+    os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
+    if drop and a.run.lower().endswith('.mzml'):
+        st = write_calibrated(a.run, a.out, None, '', set(), drop, n_drop)
+        log('%s: the run without its %d survey scans' % (a.out, st['dropped']))
+        return st
+    os.symlink(os.path.realpath(a.run), a.out)
+    log('%s: a link to the run as it is' % a.out)
+    return None
 
 
 def main():
@@ -755,7 +801,8 @@ def main():
     ap.add_argument('--min-targets', type=int, default=20)
     ap.add_argument('--min-points', type=int, default=150)
     ap.add_argument('--windows', help="REMOVE_SURVEY_SCANS's isolation-window table: a run without narrow "
-                    "targeted windows passes through without being read")
+                    "targeted windows passes through without being read, and the scans of the windows it "
+                    "marks as survey windows are left out of the file written")
     ap.add_argument('--sample-id', help='for the summary row and the warnings')
     ap.add_argument('--summary', help='one-row TSV for the per-run table')
     ap.add_argument('--warnings', help='lines for warnings.txt')
@@ -807,10 +854,7 @@ def finish(a, report, status, corrected):
 def passthrough(a, status, report):
     print(status, flush=True)
     if a.out:
-        if os.path.lexists(a.out):
-            os.remove(a.out)
-        os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
-        os.symlink(os.path.realpath(a.run), a.out)
+        as_acquired(a, survey_windows(a.windows))
     report['status'] = status
     with open(a.report + '.json', 'w') as fh:
         json.dump(report, fh, indent=1, default=float)
@@ -943,19 +987,17 @@ def run(a):
     report['status'] = status
     if a.out:
         os.makedirs(os.path.dirname(a.out) or '.', exist_ok=True)
+        survey = survey_windows(a.windows)
         if curve is None:
-            if os.path.lexists(a.out):
-                os.remove(a.out)
-            os.symlink(os.path.realpath(a.run), a.out)
-            log('%s: a link to the run as it is' % a.out)
+            as_acquired(a, survey, log)
         else:
             note = 'MS2 m/z minus a smooth function of m/z%s fitted to %d fragment errors of %d library targets' % (
                 ' and retention time' if use_rt else '', len(pts), info['targets_with_apex'])
-            st = write_calibrated(a.run, a.out, curve, note, set(groups))
+            st = write_calibrated(a.run, a.out, curve, note, set(groups), *survey)
             report['written'] = st
             log('wrote %s: %d MS2 spectra corrected (%d peaks, largest shift %.3f Th); %d MS2 spectra of other '
-                'scan types left as they were' % (a.out, st['spectra'], st['peaks'], st['max_abs_shift'],
-                                                   st['other_ms2']))
+                'scan types left as they were; %d survey scans left out' % (
+                    a.out, st['spectra'], st['peaks'], st['max_abs_shift'], st['other_ms2'], st['dropped']))
     report['seconds'] = round(time.time() - t0, 1)
     with open(a.report + '.json', 'w') as fh:
         json.dump(report, fh, indent=1, default=float)

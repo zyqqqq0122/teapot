@@ -10,6 +10,7 @@ process REMOVE_SURVEY_SCANS {
 
     input:
     tuple val(meta), path(run), path(reference_list)
+    val   table_only
 
     output:
     tuple val(meta), path("targeted/${run.name}"), path(reference_list), emit: run
@@ -22,7 +23,7 @@ process REMOVE_SURVEY_SCANS {
     remove_survey_scans.py \\
         --run   ${run} \\
         --out   targeted/${run.name} \\
-        --table ${meta.id}.isolation_windows.tsv
+        --table ${meta.id}.isolation_windows.tsv ${table_only ? '--table-only' : ''}
 
     cat <<-EOF > versions.yml
     "${task.process}":
