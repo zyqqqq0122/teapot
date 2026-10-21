@@ -640,6 +640,8 @@ workflow {
                     .combine(PREPARE_LIBRARY_ENCYCLOPEDIA.out.reference_list_derived)
                     .map { meta, f, _orig_rl, derived -> tuple(meta, f, derived) }
                 enc_prm_targets = PREPARE_LIBRARY_ENCYCLOPEDIA.out.reference_list_derived
+                CHECK_REFERENCE_COVERAGE(enc_prm_targets, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, 'enc_prm')
+                warning_chs << CHECK_REFERENCE_COVERAGE.out.warnings.flatMap { Warnings.inFile(it, 'enc_prm') }
             } else {
                 error "encyclopedia+PRM samples need a reference_list, either " +
                       "in the samplesheet's reference_list column, or via " +

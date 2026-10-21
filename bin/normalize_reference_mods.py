@@ -37,10 +37,14 @@ def main():
     a = ap.parse_args()
 
     con = sqlite3.connect(f"file:{a.library}?mode=ro", uri=True)
-    exact, lib = set(), {}
-    for (modseq,) in con.execute("SELECT DISTINCT PeptideModSeq FROM entries"):
+    cols = {r[1] for r in con.execute("PRAGMA table_info(entries)")}
+    source = "provenance" if "provenance" in cols else "NULL"
+    exact, lib, assay = set(), {}, {}
+    for modseq, prov in con.execute(f"SELECT DISTINCT PeptideModSeq, {source} FROM entries"):
         exact.add(modseq)
         lib.setdefault(key(modseq), set()).add(modseq)
+        if prov == "target":
+            assay.setdefault(key(modseq), set()).add(modseq)
     con.close()
 
     lines = open(a.reference, newline="").read().splitlines()
@@ -50,10 +54,17 @@ def main():
     rows = list(csv.reader(lines, delimiter=delim))
     changed = unmatched = ambiguous = 0
     for row in rows[1:]:
-        if not row or not row[0].strip() or row[0].strip() in exact:
+        if not row or not row[0].strip():
             continue
-        hits = lib.get(key(row[0].strip()), set())
-        if len(hits) == 1:
+        compound = row[0].strip()
+        hits = lib.get(key(compound), set())
+        own = assay.get(key(compound), set())
+        if len(own) == 1 and own != {compound}:
+            row[0] = next(iter(own))
+            changed += 1
+        elif own or compound in exact:
+            continue
+        elif len(hits) == 1:
             row[0] = next(iter(hits))
             changed += 1
         elif hits:
@@ -63,8 +74,8 @@ def main():
     with open(a.out, "w", newline="") as f:
         csv.writer(f, delimiter=delim, lineterminator="\n").writerows(rows)
     print(f"normalize_reference_mods: {len(rows) - 1} rows, {changed} rewritten to the "
-          f"library notation, {unmatched} without a library entry, {ambiguous} with "
-          f"several library spellings (both kept as is)")
+          f"library notation (the assay library's where the library also holds a background), "
+          f"{unmatched} without a library entry, {ambiguous} with several library spellings (kept as is)")
     return 0
 
 

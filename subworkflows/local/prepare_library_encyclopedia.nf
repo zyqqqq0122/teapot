@@ -4,6 +4,7 @@ include { BLIB_TO_REFERENCE_LIST                  } from '../../modules/local/en
 include { ADD_DECOYS_TO_REFERENCE_LIST               } from '../../modules/local/encyclopedia/add_decoys_to_reference_list'
 include { COMPLETE_CHANNELS                        } from '../../modules/local/library/complete_channels'
 include { COMPLETE_CHANNELS as COMPLETE_CHANNELS_CHROMATOGRAM } from '../../modules/local/library/complete_channels'
+include { NORMALIZE_REFERENCE_MODS                } from '../../modules/local/library/normalize_reference_mods'
 include { EMIT_IRT_LIBRARY                        } from '../../modules/local/library/emit_irt_library'
 include { HARMONIZE_RT as HARMONIZE_RT_TARGET     } from '../../modules/local/library/harmonize_rt'
 include { HARMONIZE_RT as HARMONIZE_RT_BACKGROUND } from '../../modules/local/library/harmonize_rt'
@@ -57,14 +58,6 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
 
             BLIB_TO_REFERENCE_LIST(source_blib_ch)
 
-            if (params.add_decoys_to_reference_list) {
-                ADD_DECOYS_TO_REFERENCE_LIST(BLIB_TO_REFERENCE_LIST.out.reference_list,
-                                     Channel.value(file(params.reference_list_decoy_jar)))
-                reference_list_ch = ADD_DECOYS_TO_REFERENCE_LIST.out.reference_list
-            } else {
-                reference_list_ch = BLIB_TO_REFERENCE_LIST.out.reference_list
-            }
-
             if (has_bg) {
                 def anchors_ch
                 if (params.irt_library && params.irt_anchors) {
@@ -88,11 +81,23 @@ workflow PREPARE_LIBRARY_ENCYCLOPEDIA {
                               HARMONIZE_RT_BACKGROUND.out.library)
                 dlib_ch = MERGE_LIBRARIES.out.dlib
 
+            } else {
+                dlib_ch = BLIB_TO_DLIB.out.dlib
+            }
+
+            NORMALIZE_REFERENCE_MODS(BLIB_TO_REFERENCE_LIST.out.reference_list, dlib_ch)
+            if (params.add_decoys_to_reference_list) {
+                ADD_DECOYS_TO_REFERENCE_LIST(NORMALIZE_REFERENCE_MODS.out.reference_list,
+                                     Channel.value(file(params.reference_list_decoy_jar)))
+                reference_list_ch = ADD_DECOYS_TO_REFERENCE_LIST.out.reference_list
+            } else {
+                reference_list_ch = NORMALIZE_REFERENCE_MODS.out.reference_list
+            }
+
+            if (has_bg) {
                 ASSERT_RT_COHERENT(dlib_ch)
                 ASSERT_BACKGROUND_ADEQUATE(dlib_ch, reference_list_ch,
                                            background_min_targets)
-            } else {
-                dlib_ch = BLIB_TO_DLIB.out.dlib
             }
         } else if (params.use_koina) {
             KOINA_PREDICT(fasta)
