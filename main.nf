@@ -216,13 +216,10 @@ workflow {
     if (!(cal_min == 'auto' || (cal_min.isNumber() && (cal_min as double) >= 0))) {
         error "fragment_mz_calibration_min_offset must be auto or a number of Th (0 or more), got '${cal_min}'."
     }
-    def enc_quant_mode = params.encyclopedia_quant in [true, 'true', 'on'] ? 'on' :
-                         params.encyclopedia_quant in [false, 'false', 'off'] ? 'off' :
-                         params.encyclopedia_quant == 'auto' ? 'auto' : null
-    if (enc_quant_mode == null) {
-        error "encyclopedia_quant must be auto, on or off, got '${params.encyclopedia_quant}'."
+    if (!(params.encyclopedia_quant in [true, false])) {
+        error "encyclopedia_quant must be true or false, got '${params.encyclopedia_quant}'."
     }
-    def enc_quant = enc_quant_mode == 'on' || (enc_quant_mode == 'auto' && params.primary_abundance == 'encyclopedia')
+    def enc_quant = params.encyclopedia_quant
     def tol = params.pair_rt_tolerance_seconds as String
     if (!(tol == 'auto' || (tol.isNumber() && (tol as double) >= 0))) {
         error "pair_rt_tolerance_seconds must be auto or a number of seconds (0 = off), got '${tol}'."
@@ -449,8 +446,8 @@ workflow {
         }
     }
     if (has_enc && !enc_quant && params.primary_abundance == 'encyclopedia') {
-        error "Pre-flight: encyclopedia_quant is off, but primary_abundance is encyclopedia, whose amounts it " +
-              "gives. Set encyclopedia_quant to auto, or choose another primary_abundance."
+        error "Pre-flight: encyclopedia_quant is false, but primary_abundance is encyclopedia, whose amounts it " +
+              "gives. Set encyclopedia_quant to true, or choose another primary_abundance."
     }
     def no_primary = routes.findAll { r -> !gives_primary(r[0], r[1]) }
     if (no_primary) {
