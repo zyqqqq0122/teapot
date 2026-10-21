@@ -221,22 +221,6 @@ process FINALIZE_QUANT {
     RTQ = 'rt_%s_seconds' % PRIMARY
     if not any(o.get(RTQ) for o in out):
         RTQ = 'rt_apex_seconds'
-    heavy_rt = {(o['sample_id'], o['_form'], o['charge']): num(o.get(RTQ)) for o in out
-                if o['channel'] == 'heavy' and o['detected'] == 'true'}
-
-    def apart(o):
-        if PRIMARY == 'standard_peak':
-            c = num(o['_coel'])
-            return MIN_COEL > 0 and c is not None and c < MIN_COEL
-        a, b = num(o.get(RTQ)), heavy_rt.get((o['sample_id'], o['_form'], o['charge']))
-        return TOL > 0 and a is not None and b is not None and abs(a - b) > TOL
-
-    n_apart = 0
-    if LABEL:
-        for o in out:
-            if o['channel'] == 'light' and o['detected'] == 'true' and apart(o):
-                o['detected'] = 'false'
-                n_apart += 1
 
     if not targets:
         for o in out:
@@ -359,15 +343,11 @@ process FINALIZE_QUANT {
                 n_ids.append((sid, len(hit)))
                 w.writerow([ROUTE, sid, len(targets), len(hit), len(quant)])
 
-    if paired and PRIMARY == 'standard_peak':
-        print("light detected: identified at q <= %g and following its standard over the standard's "
-              "peak (co-elution >= %g); %d identified light(s) that do not follow it not detected"
-              % (FDR, MIN_COEL, n_apart) if MIN_COEL > 0 else "light detected: co-elution not checked",
+    if paired:
+        print("detected: identified at q <= %g; a pair is quantified when its light also %s" % (
+              FDR, "follows its standard over the standard's peak (co-elution at least the run's pair_min_coelution)"
+              if PRIMARY == 'standard_peak' else "peaks within the run's pair_rt_tolerance_seconds of its standard"),
               file=sys.stderr)
-    elif paired:
-        print("light detected: identified at q <= %g with its peak (%s) within %g s of its standard's; "
-              "%d identified light(s) further apart not detected" % (FDR, RTQ, TOL, n_apart)
-              if TOL > 0 else "light detected: co-elution not checked", file=sys.stderr)
     print("wrote quant.full.tsv (%d rows), quant.reference.tsv (%d), quant.reference.confident.tsv (%d) "
           "over %d sample(s)" % (len(out), len(reference), len(confident), len(samples)),
           file=sys.stderr)

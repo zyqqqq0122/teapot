@@ -279,8 +279,7 @@ process QUANTIFY_HEAVY_LIGHT {
     pairs['ratio_L_H'] = light / heavy
     pairs['ratio_H_L'] = heavy / light
     pairs['abs_pmol_light'] = pairs['ratio_L_H'] * pd.to_numeric(pairs['heavy_pmol_known'], errors='coerce')
-    pairs['light_identified'] = pairs['light_q_value'] <= FDR
-    pairs['light_detected'] = pairs['light_identified'] & ~pairs['co_eluting'].eq(False).fillna(False).astype(bool)
+    pairs['light_detected'] = pairs['light_q_value'] <= FDR
     pairs['heavy_detected'] = pairs['heavy_q_value'] <= FDR
 
     def status(r):
@@ -332,8 +331,7 @@ process QUANTIFY_HEAVY_LIGHT {
         cols = [c for c in cols if not c.endswith('_consistency')]
     if 'standard_peak' not in methods:
         cols = [c for c in cols if c != 'coelution']
-    pairs = pairs[cols + ['light_identified']].sort_values(['method', 'sample_id', 'protein', 'peptide',
-                                                            'peptidoform', 'charge'])
+    pairs = pairs[cols].sort_values(['method', 'sample_id', 'protein', 'peptide', 'peptidoform', 'charge'])
     pairs[cols].to_csv("peptide.abs_quant.tsv", sep='\\t', index=False)
 
     conf = pairs[pairs['confident']][cols].drop(columns=[c for c in ('method', 'status', 'confident', 'light_detected',
@@ -354,32 +352,21 @@ process QUANTIFY_HEAVY_LIGHT {
                 .reset_index()
                 .to_csv("protein.abs_quant.tsv", sep='\\t', index=False))
 
-    print(f"light/heavy pairs per tool (q <= {FDR} on both channels = identified; a light co-eluting "
-          f"with its standard as well = detected):", file=sys.stderr)
+    print(f"light/heavy pairs per tool (both channels detected, q <= {FDR}; a light co-eluting with its "
+          f"standard as well):", file=sys.stderr)
     for m, g in pairs.groupby('method'):
         q = g[g['status'] == 'both_quantified']
-        i = q[q['light_identified'] & q['heavy_detected']]
-        d = q[q['light_detected'] & q['heavy_detected']]
+        i = q[q['light_detected'] & q['heavy_detected']]
+        d = i[~i['co_eluting'].eq(False).fillna(False).astype(bool)]
         mark = '  <- primary_abundance: confident table, matrix, protein amounts' if m == PRIMARY else ''
         print(f"  {m:14} {q['peptide'].nunique():4} peptides with both channels quantified, "
-              f"{i['peptide'].nunique():4} with both identified, {d['peptide'].nunique():4} with both "
-              f"detected{mark}", file=sys.stderr)
-        if m == 'standard_peak' and MIN_COEL > 0:
-            print(f"  {'':14} identified pair rows: {len(i)}; the light following its standard over the "
-                  f"standard's peak (co-elution >= {MIN_COEL:g}): {int(i['co_eluting'].eq(True).sum())}, "
-                  f"not following it: {int(i['co_eluting'].eq(False).sum())}, not measured: "
-                  f"{int(i['co_eluting'].isna().sum())}", file=sys.stderr)
-        elif m != 'standard_peak' and TOL > 0:
-            print(f"  {'':14} identified pair rows: {len(i)}; light and heavy peaks within "
-                  f"{TOL:g} s: {int(i['co_eluting'].eq(True).sum())}, further apart: "
-                  f"{int(i['co_eluting'].eq(False).sum())}, no retention time: "
-                  f"{int(i['co_eluting'].isna().sum())}", file=sys.stderr)
-    if TOL <= 0 and any(m != 'standard_peak' for m in methods):
-        print("co-elution of light and heavy peaks not checked (pair_rt_tolerance_seconds 0)",
-              file=sys.stderr)
-    if MIN_COEL <= 0 and 'standard_peak' in methods:
-        print("standard_peak: the light's co-elution with its standard not checked (pair_min_coelution 0)",
-              file=sys.stderr)
+              f"{i['peptide'].nunique():4} with both detected, {d['peptide'].nunique():4} of them "
+              f"co-eluting{mark}", file=sys.stderr)
+        how = ("following its standard over the standard's peak" if m == 'standard_peak'
+               else "peaking within the run's pair_rt_tolerance_seconds of its standard")
+        print(f"  {'':14} detected pair rows: {len(i)}; the light {how}: "
+              f"{int(i['co_eluting'].eq(True).sum())}, not: {int(i['co_eluting'].eq(False).sum())}, not checked: "
+              f"{int(i['co_eluting'].isna().sum())}", file=sys.stderr)
     print(f"confident pairs: {len(conf)}, {len(amounts)} of them with a known amount "
           f"(matrix and protein amounts)", file=sys.stderr)
     warnings = []
