@@ -120,7 +120,7 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 |---|---|
 | `msconvert` | vendor files to mzML (§4): the samplesheet's in `main.nf`, a sheet's in `PREPARE_CHROMATOGRAM_LIBRARY`. A `.wiff` converts to `<name>-<sample>.mzML`, one file per sample it holds, so every `.mzML` written is taken |
 | `remove_survey_scans` | every samplesheet run, on every route: lists its isolation windows and removes the scans of survey windows (§7) |
-| `calibrate_fragment_mz` | every samplesheet run after `remove_survey_scans`: measures the fragment m/z error on the run's own targets and corrects the runs that are far off; the targets it locates are the anchors of `align_retention_times` (§7) |
+| `calibrate_fragment_mz` | every samplesheet run after `remove_survey_scans`, and every run of `library_sheet` before its search: measures the fragment m/z error on the run's own targets and corrects the runs that are far off; the targets it locates are the anchors of `align_retention_times` (§7) |
 | `align_retention_times` | once per EncyclopeDIA route, SIL runs: each reference precursor's apex window in each run, from the runs acquired nearest in time (§7) |
 
 ### `encyclopedia/`
@@ -179,6 +179,8 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 | `merge_quant_<engine>_<mode>` | joins identifications and every tool's abundance into one long table |
 | `assert_quant_productive` | stops if the quantification `analysis.elib` matched no fragment ions, warns above `quant_max_zero_ion_fraction` (EncyclopeDIA routes) |
 | `derive_pair_rt_tolerance` | SIL runs: how far apart a light and its heavy standard may be measured and still pair (`pair_rt_tolerance_seconds`, §8), in `pair_rt_tolerance.tsv`, which `finalize_quant` and `quantify_heavy_light` read |
+| `derive_search_tolerance` | every EncyclopeDIA route and `library_sheet`: the fragment tolerance the searches use, from the calibrants' fragment errors of all its runs (`search_tolerance`, §7), in `qc/fragment_tolerance.<route>.tsv` |
+| `derive_pair_min_coelution` | SIL runs measured with `standard_peak` (EncyclopeDIA routes): the co-elution a light must reach with its standard to pair (`pair_min_coelution`, §8), from the light traces moved to where the light cannot be, in `pair_min_coelution.tsv`, which `finalize_quant` and `quantify_heavy_light` read |
 | `finalize_quant` | `quant.full.tsv`, `quant.reference.tsv`, `quant.reference.confident.tsv` and `quant_summary.tsv`; warns about runs below `search_min_reference_ids` |
 | `quantify_heavy_light` | light/heavy pairs and absolute pmol |
 | `quantify_standard_peak` | SIL runs, EncyclopeDIA routes, per run: both forms of each pair measured over the heavy standard's peak, `abundance_standard_peak` (§8) |
@@ -191,8 +193,12 @@ EncyclopeDIA's own names force it: the `-massList` flag, `MassListDecoyGenerator
 `normalize_reference_mods.py`, `check_reference_coverage.py`, `select_diathem_targets.py`,
 `remove_survey_scans.py`, `calibrate_fragment_mz.py`, `align_retention_times.py`,
 `quantify_standard_peak.py`, `restrict_background.py`, `derive_pair_rt_tolerance.py`,
+`derive_pair_min_coelution.py`, `derive_search_tolerance.py`,
 `diathem_quant.py` (the precursor tolerance `DIATHEM_QUANT` passes diathem, §7).
-Shorter modules inline their Python in a heredoc.
+Shorter modules inline their Python in a heredoc, `python3 - <<'PY' 2>&1 | tee <step>.log` under
+`set -o pipefail`: what the script prints, its error message among it, reaches the task's
+output, which Nextflow shows when the task fails, as well as the log. Sent to the log alone, a
+failing step showed only its exit status.
 
 `lib/` is required at start-up:
 
@@ -200,6 +206,10 @@ Shorter modules inline their Python in a heredoc.
   the search flags in `INHERITED_FLAGS` (`-ftol`, `-ptol`, `-frag`, `-fixed`,
   `-enzyme` and their unit/offset flags) into the libexport calls, so quantification
   uses the same tolerances as the search. `-instrument` is not among them (§12).
+  `fragmentTolerance()` reads a search's `-ftol` and `-ftolunits` (EncyclopeDIA's defaults
+  when absent) for the fragment m/z calibration (§7); `readTolerance()` reads the tolerance the
+  runs measured (§7), and `withBatchTolerance()` puts it into a search's arguments as `-ftol`
+  (with `-ftolunits` `AMU` or `PPM`, the unit it was measured in).
 * `Fingerprint.groovy`: hashes a file or directory (the EncyclopeDIA jar) into the
   task scripts of the searches and the exports (`SEARCH_DIA`, `CONTEXT_SEARCH`, both
   `-libexport` modules), so a rebuilt jar invalidates their `-resume` caching. It
@@ -504,8 +514,10 @@ OOM-killed with 16 GB. Put defaults in the generic scope instead.
 * an invalid `diathem_targets_source`, or `library` with `--openswath_pqp`, `_tsv`
   or `_traml`, which have no spectral library to take the targets from
 * PRM rows with neither a `reference_list` nor a `.blib`
-* a route with fewer runs than `quant_min_runs`, when `quant_require_min_runs` is
-  set (otherwise a warning)
+* a route with fewer runs than `quant_min_runs` (5: a SIL run and the 4 runs it is aligned
+  to) when `quant_require_min_runs` is true; by default it is a warning and the run goes on,
+  each run aligned to the others there are, a single run searched without windows (§7)
+* `encyclopedia_quant: off` with `primary_abundance: encyclopedia`, whose amounts it gives
 
 ## 7. Scan selection and OpenSWATH's fragment window
 
@@ -533,6 +545,7 @@ scans, RT span and whether it was removed.
 
 The runs of `library_sheet` and `background_sheet` are searched whole, survey scans
 included: they only add peptides to a library, and none of their scans is quantified.
+Their fragment m/z are calibrated as the samplesheet runs' are (below).
 A background from the whole runs trained Context at least as well as one from their
 survey or their targeted scans alone (§12).
 
@@ -612,8 +625,8 @@ tool reads the same spectra. It needs no search and no FDR:
 * Calibrants are the run's own targets: the entries of the user's library (`blib`,
   `openswath_blib`, `elib` or `dlib`, the first given; it does not wait for library
   preparation), restricted to the samplesheet row's reference list when there is one,
-  whose precursor sits within 0.05 Th of the centre of a window at most 4 Th wide. Their
-  b and y ions are annotated and taken at their theoretical m/z.
+  whose precursor lies within 0.05 Th of the isolation target of a window at most 4 Th wide.
+  Their b and y ions are annotated and taken at their theoretical m/z.
 * Each is read only in the window nearest to its precursor. Windows are told apart by their
   target m/z to 4 decimals, the precision of isolation lists: two targets a few thousandths
   of a Th apart (a standard and another peptide's light, say) keep separate windows, which a
@@ -621,7 +634,14 @@ tool reads the same spectra. It needs no search and no FDR:
   candidate whose nearest window is centred on another candidate, and isobaric candidates
   of different peptides at one centre, are not used, as the measurement leaves out a pair
   whose window is shared (§8).
-* Each is read in every scan of its window at +/-0.6 Th (wider than the error); its
+* The tolerances are fractions of the fragment tolerance T of the search the run goes to
+  (`-ftol` and `-ftolunits` of `dia_search_args`, `context_search_args` or, for the runs of a
+  sheet, `sheet_search_args`; in ppm, at each fragment's m/z), so that they keep their meaning
+  on other instruments. A search's T must cover the instrument's error before correction.
+  OpenSWATH's extraction window does not: its label-free template reads +/-0.2 Th because the
+  runs are corrected first. Runs of the OpenSWATH routes therefore keep the ion-trap scale
+  T = 0.4 Th, on which the fractions are the values the step was built with.
+* Each is read in every scan of its window at +/-1.5 T (wider than the error); its
   apex is the scan with the most fragment signal among scans whose pattern correlates
   with the library's (square roots, r >= 0.5) with at least 4 fragments. It is a
   calibrant when at the apex the pattern correlates at r >= 0.7, its fragments co-elute
@@ -629,15 +649,15 @@ tool reads the same spectra. It needs no search and no FDR:
   at least 3 times the window's median signal.
 * At the apex and its two neighbours every fragment gives observed minus theoretical m/z.
   A robust LOWESS of error against m/z is fitted; a calibrant whose fragments are off it
-  by more than 0.15 Th (median) is dropped; the peaks are matched again to the curve
-  (+/-0.2 Th) and the curve refitted, with a smooth retention-time term when at least 50
+  by more than 0.375 T (median) is dropped; the peaks are matched again to the curve
+  (+/-0.5 T) and the curve refitted, with a smooth retention-time term when at least 50
   calibrants remain. Both terms are held constant outside the calibrants' ranges.
 * The calibrants must agree: fewer than 20 consistent ones, fewer than 150 errors, or more
   than 30 % of the calibrants off the common curve (a wrong library, or no real targets)
   leave the run as it is. True matches agree on one smooth curve and chance matches do
   not, which is why no FDR is needed: the fit needs most calibrants right, not all.
-* A run whose curve stays below `fragment_mz_calibration_min_offset` (0.1 Th) everywhere
-  is left as it is: on well-calibrated runs a correction gained nothing and cost
+* A run whose curve stays below `fragment_mz_calibration_min_offset` everywhere (`auto`:
+  0.25 T) is left as it is: on well-calibrated runs a correction gained nothing and cost
   OpenSWATH detections.
 * Otherwise every MS2 peak of the calibrants' scan type (the Thermo filter string without
   the precursor: analyzer, scan rate, activation, range) is moved by minus the curve; MS1
@@ -647,6 +667,32 @@ tool reads the same spectra. It needs no search and no FDR:
   an m/z calibration `processingMethod` added). Runs without narrow windows (DIA, from
   `REMOVE_SURVEY_SCANS`'s window table) and runs that are not mzML pass through as a link
   without being read.
+* The runs of `library_sheet` are calibrated the same way in `PREPARE_CHROMATOGRAM_LIBRARY`
+  (its `calibrate` input), before they are merged and searched: against the library they are
+  searched with, without a reference list, with `sheet_search_args`'s T. They keep their
+  survey scans, so the step tells their DIA runs by finding no narrow window itself.
+  `qc/fragment_mz_calibration.<name>.tsv`, `<name>` being `chromatogram` or
+  `chromatogram_osw`. The runs of `background_sheet` are searched as acquired: a background
+  only has to be roughly right, and their calibrants, located against a predicted library
+  without a reference list, are few.
+* The step also counts the calibrants' fragment errors the search will see (left after the
+  curve, or as acquired in a run left as it is), read at +/-1.5 T, by absolute error in bins of
+  T/80 (`<sample>.fragment_mz.tolerance.tsv`). `DERIVE_SEARCH_TOLERANCE`
+  (`derive_search_tolerance.py`, once per EncyclopeDIA route and `library_sheet`) adds up the counts
+  of its runs and measures the fragment tolerance their searches need: the chance matches are
+  counted in the outer quarter, from 1.125 T to 1.5 T, where after the correction almost no true
+  match lies, and taken off evenly over the whole range; the tolerance is the narrowest width,
+  from T/20 on, that holds 99 % of the rest (`--share`). It may be narrower or wider than T.
+  The runs are pooled, not each measured and then averaged: a run with a few dozen calibrants
+  gives a noisy value of its own, and the runs of a batch share the instrument.
+  With `search_tolerance: auto` (the default), every run that counted its errors is searched,
+  measured and exported at that `-ftol`; a run without counts (DIA, too few calibrants) keeps
+  the `-ftol` of the search arguments, whose error was not measured, and so does a merged
+  condition of a `library_sheet` unless every fraction counted. `qc/fragment_tolerance.<route>.tsv`
+  (and `<name>` of a `library_sheet`) states the value and its source, `.runs.tsv` each run's own
+  value. T,
+  the user's `-ftol`, stays the scale the step reads at; it must cover the instrument's error
+  before the correction.
 * `qc/fragment_mz_calibration.tsv` (one row per run) and `qc/<sample>/` (the curve, the
   calibrants, the error before and after); a corrected run is a warning, since the error
   is the instrument's calibration of that scan type, and so is a run whose calibrants
@@ -674,19 +720,24 @@ before the search, from the heavy standards, which are in every run:
 
 * Anchors: the standards `CALIBRATE_FRAGMENT_MZ` located in each run (rows of
   `<sample>.fragment_mz.targets.tsv` it used as calibrants: the apex of co-eluting fragments
-  matching the library's pattern), the charge states of a peptide averaged. With
+  matching the library's pattern), the charge states of a peptide averaged. Only the heavy
+  forms: from a library that also holds lights, a light located in the run is not a standard,
+  so it neither anchors the alignment nor widens a window. With
   `fragment_mz_calibration: off` and `rt_alignment: auto`, `CALIBRATE_FRAGMENT_MZ` runs with
   `--measure-only` for them. The acquisition time is the mzML `startTimeStamp`, which it
   records in its summary row (`acquired`).
-* Reference: the 4 runs acquired nearest in time, never the run itself. Their anchors are
+* Reference: the 4 runs acquired nearest in time (all the others in a route with fewer),
+  never the run itself. Their anchors are
   warped onto one scale (robust LOWESS, three rounds) and each peptide's consensus time is
   the median over them; a sliding reference follows the drift and crosses batches.
 * The run's own warp: a robust LOWESS of its anchors' apexes against their consensus times.
   A peptide's expected apex comes from the warp fitted without it (10-fold): a window placed
   on a target's own best peak would favour the target over its decoys. A peptide the run
   did not show gets the full warp.
-* Half-width: 4 robust SDs of the run's out-of-fold residuals, kept between 10 and 30 s,
-  unless `rt_alignment_half_window_seconds` gives it.
+* Half-width: 4 robust SDs of the run's out-of-fold residuals, unless
+  `rt_alignment_half_window_seconds` gives it. A floor of 10 s, kept at first, covered no more
+  located standards than 4 SDs (the misses are standards far outside either, which the widening
+  below catches) and only gave a light more room to be taken at another peak.
 * Widened where the run disagrees: when the run's own located apex of a standard (any of
   its charge states) lies outside the predicted window, the window is widened to cover that
   apex +/- the half-width as well, one interval from the lower to the higher end. A
@@ -785,6 +836,17 @@ own iRT step).
   minimum, and `LibraryFile` writes no `peptidequants` row. On the plasma SIL
   cohort these are peptides whose vendor library spectrum holds only a few
   fragments, detected or not.
+* **The cross-run export runs only when its amounts are needed.** It is one job over every
+  run of a route, reading them one after another (`SearchToBLIB.convert` loops over the
+  runs), the one step whose time and memory grow with the batch. With another
+  `primary_abundance` nothing the amounts or the confident pairs use comes from it:
+  `encyclopedia_quant: auto` runs it, with the PRM route's per-sample exports and
+  `ASSERT_QUANT_PRODUCTIVE`, only with `primary_abundance: encyclopedia`; `on` runs it
+  always, `off` never. Without it `abundance_encyclopedia` and its pairs are absent; the
+  mergers read no `.elib`, proteins come from Context's table or, as for any row without
+  one, from the FASTA (below). EncyclopeDIA could split the export (`-alignOnly`, then
+  `-alignmentFrom` over a subset of runs) to quantify large label-free batches in parallel;
+  TEAPOT does not.
 * **An EncyclopeDIA light/heavy ratio sums the same fragments in both forms.** The
   export picks each library entry's quant ions on its own (`getArchetypals` keys them
   by `PeptideModSeq`, one set for every run), so a light peptide and its standard are
@@ -804,12 +866,18 @@ own iRT step).
   in its pair. One shared ion is enough. The per-form tables keep `TotalIntensity`,
   every quant ion of the form, since a form's own abundance needs no partner.
 * **Reporting tables (`FINALIZE_QUANT`).** One status: `detected` is
-  `q_value <= fdr`. The reference set is the reference list's (peptide, channel)
-  pairs, or without a list every pair detected in at least one sample, so a DIA
-  route reports the peptides it found rather than everything the search scored.
-  `quant.reference.confident.tsv` is the detected rows of `quant.reference.tsv`;
+  `q_value <= fdr`, and for a light peptide on SIL runs the light must also pass its pair's
+  co-elution check (below): a light the search identified that does not elute with its
+  standard is not detected, in the tables as in the summary, just as it gives no pair
+  (`coelution_standard_peak` shows the value). A peptide is a form: its sequence with its
+  modifications other than the label, masses to 0.1 Da, so a second form (an oxidised
+  methionine, say) is a reference peptide of its own. The reference set is the reference
+  list's (form, channel) pairs, or without a list every pair detected in at least one
+  sample, so a DIA route reports the peptides it found rather than everything the search
+  scored. `quant.reference.confident.tsv` is the detected rows of `quant.reference.tsv`;
   other peptides, a larger library's or a background's, are only in `quant.full.tsv`.
-  Membership ignores charge. The summary counts reference peptides per sample, a
+  Membership ignores charge, but a reference precursor no tool reported in a run gets a
+  row at each of its charges. The summary counts reference peptides per sample, a
   peptide being detected when any of its charges is, and quantified when the
   `primary_abundance` tool gave that detection an abundance. When the reference
   holds both channels of a peptide it counts light/heavy pairs instead: both
@@ -848,8 +916,9 @@ own iRT step).
   `pair_rt_tolerance_seconds: auto` (`DERIVE_PAIR_RT_TOLERANCE`) takes half the
   median width of the `primary_abundance` tool's peaks of the heavy standards detected
   in the batch: EncyclopeDIA's `RTInSecondsStop - RTInSecondsStart` of the integrated
-  peak (also for `standard_peak`), OpenSWATH's and TRIC's `rightWidth - leftWidth` of the
-  feature (`width_<tool>_seconds` in `base_quant`). The standards are spiked into every run, so
+  peak (also for `standard_peak`, or, when the export did not run, the standard peaks'
+  `stop - start`), OpenSWATH's and TRIC's `rightWidth - leftWidth` of the feature
+  (`width_<tool>_seconds` in `base_quant`). The standards are spiked into every run, so
   their peaks measure the chromatography without depending on the light. With fewer
   than 20 such peaks, or a tool without widths (diathem), it falls back to 9 s. A
   number overrides it; `DERIVE_PAIR_RT_TOLERANCE` publishes the value and its source in
@@ -864,38 +933,52 @@ own iRT step).
   after the search, reading the search's peptide table) instead lets the standard decide
   the peak and integrates both forms' same fragments over the same boundaries, for every
   pair whose heavy the search identified (q <= `fdr`) and whose precursors have windows of
-  their own. The heavy's fragment traces are each averaged over
+  their own (the window whose isolation target, not the middle of its bounds, lies within
+  0.01 Th of the precursor; the nearest wins). The heavy's fragment traces are each averaged over
   3 scans and summed; the apex starts at the scan nearest the search's apex of the heavy and
   moves to the higher neighbour of that sum at most 3 times, so it may lie a few seconds
-  outside the apex window; the boundaries are where the sum falls below a tenth of the apex
-  (at most 30 s each side). The heavy's 12 strongest library peaks whose light counterparts
+  outside the apex window; the boundaries are where the sum falls below a tenth of the apex,
+  each at most 2.5 times the median width of the run's standard peaks from the apex (the
+  median of the peaks found without that limit), so a peak running into a neighbour or a raised
+  baseline stops at the same multiple of the chromatography's peak width on any gradient. The heavy's 12 strongest library peaks whose light counterparts
   are in the light entry (same m/z, or apart by the labels the ion holds) are integrated as
   read, not averaged, in each form's own window; one under 5 % of the strongest heavy area
   is not used, and one more than 2-fold off the others' L/H is dropped as interfered. The
   co-elution (the Pearson correlation of the two forms' 3-scan averaged traces summed over
-  the fragments used, at the heavy's scans from 10 s before the boundaries to 10 s after,
-  the light's read at those times) and the cosine of the fragment areas (rdotp) are
-  reported as quality. It is TEAPOT's own
+  the fragments used, at the heavy's scans from one median standard peak width of the run
+  before the boundaries to one after, the light's read at those times) and the cosine of the
+  fragment areas (rdotp) are reported as quality. The same correlation is also read with the
+  light's trace moved 2 and 3 median peak widths earlier and later, where the light cannot
+  be, as long as the run covers it (`coelution_null`): the co-elution a light reaches by
+  chance. It is TEAPOT's own
   measurement, a quantifier like the others: the merger puts the two areas into
   `abundance_standard_peak` and, on the light's row, its co-elution into
   `coelution_standard_peak`. `FINALIZE_QUANT` and `QUANTIFY_HEAVY_LIGHT` judge its pairs by
   that co-elution, not by the distance of the search's apexes: a pair is confident when the
   search identified both forms (q <= `fdr`) and the light's summed trace correlates with the
-  standard's at least `pair_min_coelution` (0.7) over the boundaries and 10 s either side.
+  standard's at least `pair_min_coelution` over the boundaries and one peak width either
+  side. Its `auto` (`DERIVE_PAIR_MIN_COELUTION`, `derive_pair_min_coelution.py`, once per
+  route) is the co-elution that 5 % of the moved light traces of all the route's runs reach
+  (`--rate`), so a light that does not elute with its standard passes 1 time in 20 whatever
+  the runs' chromatography, noise and peak width; pooled over the runs, which share the
+  chromatography, since a run's few hundred pairs estimate a 5 % tail poorly. Fewer than 200
+  moved traces fall back to 0.7. `quant/<route>/pair_min_coelution.tsv` states the value and
+  its source; a number sets it, 0 turns the check off.
   The search's apex is the best scan of a trace sampled once a cycle, so even a true pair's
   apexes can lie a scan or two apart; and with apex windows it is held inside the window, so
   a light identified on the flank of a neighbouring peak, at the window's edge, lies only
   several seconds from its standard and passes a tolerance of half a peak width. The
-  co-elution reads the whole peak where the amount is measured. On replicate runs of one
-  pool, below about 0.7 a light's L/H is off its precursor's usual value about as often
-  whatever its co-elution, and above it that share falls steadily; hence 0.7.
+  co-elution reads the whole peak where the amount is measured.
   `pair_rt_tolerance_seconds` then serves the other tools' pairs in `peptide.abs_quant.tsv`,
-  and its `auto` takes EncyclopeDIA's peak widths. A light the search did not identify still gets a measured value in
+  and its `auto` takes EncyclopeDIA's peak widths (the standard peaks' without the export). A light the search did not identify still gets a measured value in
   `peptide.abs_quant.tsv`, not confident. The SIL template sets
   `primary_abundance: standard_peak`; EncyclopeDIA's own amounts stay in
   `abundance_encyclopedia`. Per-run details in `quant/<route>/standard_peak/`.
 * **Absolute-quant tables.** `peptide.abs_quant.tsv` has every light/heavy pair of
-  every tool, with a `status`, each channel's `light_detected` and `heavy_detected`,
+  every tool, keyed by sample, form (`peptidoform`, as in the reporting tables) and charge,
+  so each form of a peptide is a pair with its own L/H, with a `status`, each channel's
+  `light_detected` (the light identified and co-eluting, as in the reporting tables) and
+  `heavy_detected`,
   the two measured retention times, `coelution` (`standard_peak`), `co_eluting`, and
   `confident`, true for exactly
   the rows of `peptide.abs_quant.confident.tsv`, so that table is a filter on one
@@ -935,6 +1018,10 @@ own iRT step).
     other's
   * flanking residues: Percolator writes `-.PEPTIDE.-`, the `.elib` writes
     `PEPTIDE`
+  * modification form: the mergers join the export, the search table and the
+    `standard_peak` rows on the form, not the bare sequence. On the sequence, a second
+    form of a peptide repeated the rows of the first, and a form reported in one channel
+    only doubled that channel's amount
   * file name to sample: each route's `sample_map` is built from the files it
     receives, after `MSCONVERT`; EncyclopeDIA names outputs after the full input
     name (`<stem>.mzML.encyclopedia.txt`), so a name maps to the run whose stem it
@@ -1235,17 +1322,87 @@ end to end.
   identifications on the SIL template's runs, so the mode is left as it is. A library of a
   few hundred entries leaves few decoys behind each run's 1 % threshold.
 
-## 13. Deferred: inferring engine and settings from the data
+## 13. Settings measured from the runs, and the fixed numbers
+
+The settings that depend on the state of the runs (their fragment m/z error, their noise, their
+chromatography and peak widths) are measured from the input runs of each batch rather than set
+from test data: they change from batch to batch on one instrument, and a value tuned on one study's
+runs does not carry over to another's. Every measured value is written to a QC table with how it
+was reached; a value the user gives for the parameter wins; when the runs cannot give one, the step
+falls back to the user's setting or a stated default and says so. What stays fixed is of two
+kinds: unitless constants of the rules (a share, a multiple of a measured width, a fraction of the
+search's own fragment tolerance T), and conventions of the acquisition method and the library (the
+width and m/z precision of isolation windows, the precision of library fragment m/z), which do not
+drift from run to run and are listed below with what happens on files that do not follow them.
+
+### Measured from the runs
+
+| what | parameter (default) | rule | step, once per | recorded in | the user's own value |
+|---|---|---|---|---|---|
+| the fragment m/z correction | `fragment_mz_calibration` (`auto`), `fragment_mz_calibration_min_offset` (`auto`) | a smooth curve of observed minus theoretical fragment m/z of the run's own located standards, against m/z (and retention time from 50 calibrants), subtracted when it is off by more than T/4 somewhere (§7) | `CALIBRATE_FRAGMENT_MZ`, run | `qc/fragment_mz_calibration.tsv`, `qc/<sample>/` | `off`; a minimum offset in Th |
+| the searches' fragment tolerance | `search_tolerance` (`auto`) | the narrowest width, from T/20 in steps of T/80, holding 99 % of the calibrants' true fragment matches after the correction, the chance matches counted between 1.125 T and 1.5 T and taken off evenly; the runs pooled (§7) | `DERIVE_SEARCH_TOLERANCE`, route and `library_sheet` | `qc/fragment_tolerance.<route>.tsv`, `.runs.tsv` | `off`: the `-ftol` of the search arguments |
+| each reference precursor's apex window | `rt_alignment` (`auto`), `rt_alignment_half_window_seconds` (`auto`) | the expected apex from the 4 runs acquired nearest in time (the others in a smaller route; none for a single run), fitted on the run's own located heavy standards out of fold; half-width 4 robust SD of the run's residuals; widened to where the standard was located in the run (§7) | `ALIGN_RETENTION_TIMES`, route | `qc/rt_alignment.<route>.tsv`, `qc/rt_alignment/<route>/` | `off`; a half-width in seconds |
+| a standard's peak | none | the top of the 3-scan average near the search's apex of the heavy; the boundaries where it falls below a tenth of the top, at most 2.5 median standard peak widths of the run from the apex (§8) | `QUANTIFY_STANDARD_PEAK`, run | `quant/<route>/standard_peak/` | none |
+| the co-elution | none | the correlation of the two forms' averaged traces from one median standard peak width of the run before the boundaries to one after (§8) | the same | the same (`coelution`) | none |
+| the pair threshold | `pair_min_coelution` (`auto`) | the co-elution that 5 % of the light traces moved 2 and 3 median peak widths off their standard reach, the route's runs pooled; 0.7 with fewer than 200 such traces (§8) | `DERIVE_PAIR_MIN_COELUTION`, route | `quant/<route>/pair_min_coelution.tsv` | a number from 0 to 1; 0 turns the check off |
+| the pair retention-time tolerance (the other tools) | `pair_rt_tolerance_seconds` (`auto`) | half the median width of the heavy standards' peaks (EncyclopeDIA's, or the standard peaks' without the export); 9 s with fewer than 20 peaks (§8) | `DERIVE_PAIR_RT_TOLERANCE`, route | `quant/<route>/pair_rt_tolerance.tsv` | seconds; 0 turns the check off |
+
+Decisions taken from the runs without a number of their own: which windows are survey windows (a
+window at least 4 times wider than one it contains, `REMOVE_SURVEY_SCANS`), which window is a
+precursor's own (the nearest centre), which runs are a run's neighbours (acquisition times), and
+whether EncyclopeDIA's cross-run quantification runs (`encyclopedia_quant: auto`: only when its
+amounts are the primary abundance; `on`, `off`).
+
+### Unitless constants of the rules
+
+* The m/z step: it reads at +/-1.5 T, matches again within +/-0.5 T of the first curve, drops a
+  calibrant whose fragments are off that curve by more than 0.375 T (median) and corrects a run
+  whose curve exceeds T/4. A calibrant's apex pattern correlates with the library's at r >= 0.7
+  (candidates 0.5) with at least 4 fragments of at least 5 % of the strongest, its fragments
+  co-elute at >= 0.7, and its apex is at least 3 times the window's median signal; a run needs 20
+  consistent calibrants and 150 errors, with at most 30 % of the calibrants off the common curve.
+  LOWESS spans 0.2 (m/z) and 0.3 (retention time).
+* The search tolerance: 99 % of the true matches; the chance matches from the outer quarter of
+  the +/-1.5 T read.
+* The alignment: the 4 runs acquired nearest in time (fewer in a smaller route); 4 robust SD; at
+  least 20 anchors; 10 folds.
+* The measurement: 3-scan averages; the apex moves at most 3 scans; the boundaries at a tenth of
+  the top and at most 2.5 median peak widths; the heavy's 12 strongest fragments, those under 5 %
+  of the strongest left out, at least 3; a fragment more than 2-fold off the others' L/H dropped;
+  the co-elution over one median peak width either side.
+* The pair threshold: 5 % of the moved light traces; shifts of 2 and 3 median peak widths; at
+  least 200 traces.
+* A pair counts when both forms are identified at `fdr` and the light co-elutes; a route with
+  fewer than `quant_min_runs` runs (5: the 4 neighbours of the alignment and the run itself) is
+  a warning.
+
+### Fixed conventions of the acquisition method and the library
+
+| number | where | it assumes | on files that do not follow it |
+|---|---|---|---|
+| 4 Th | the m/z step reads only isolation windows at most this wide; a run without one passes through as DIA | targeted windows are narrower than DIA windows | narrow-window DIA is read as targeted: the precursors at its window centres serve as calibrants, and a well-calibrated run is left as it is |
+| 0.05 Th | a library precursor within this of a narrow window's isolation target is a calibrant candidate; the nearest target wins | the isolation list gives each target m/z to 2 decimals or more | a list rounded to 1 decimal gives fewer calibrants; a run with fewer than 20 is left as acquired |
+| 0.01 Th | a precursor's own window has its isolation target within this of its m/z, the nearest winning (the measurement; the search takes the middle of the window's bounds, §7); a reference-list entry and a library precursor are one within this (the m/z step) | the same | precursors of a list rounded to 1 decimal have no window of their own and are not measured |
+| 4 decimals | windows are told apart by their target m/z to 4 decimals | the precision of isolation lists | two targets closer than that share one window, and their pairs are left out |
+| 0.02 Th | a library fragment peak is a b or y ion within this (the m/z step); a heavy library fragment and its light counterpart match within this (the measurement) | library fragment m/z are theoretical or measured at high resolution | a library of low-resolution spectra annotates few fragments: fewer calibrants |
+| 1.5 Th, 0.5 Th | calibrant fragments within 1.5 Th of the precursor, or 0.5 Th of the scan range's edges, are not used | the precursor and the scan edges are not fragment signal | |
+| 5 s | a run whose retention times agree with its neighbours' to worse than this (robust SD) is a warning | | only a warning |
+
+They show in what the steps report (the calibrants found per run, the pairs without a window of
+their own), not in warnings. Two pairs whose isolation targets are exactly isobaric share one
+window whatever the tolerance; such pairs are left out (`window shared with another target`).
+
+## 14. Deferred: inferring the engine and the experiment from the data
 
 Not built on purpose at this stage. Part of it exists, under the rules below:
-`REMOVE_SURVEY_SCANS` finds survey windows, and `DIATHEM_QUANT` measures whether the
-targets have windows of their own (§7). A value the user set wins, every decision is recorded
+`REMOVE_SURVEY_SCANS` finds survey windows, `DIATHEM_QUANT` measures whether the
+targets have windows of their own (§7), and the settings of §13 are measured from the runs. A value the user set wins, every decision is recorded
 (`isolation_windows/`, diathem's log and `diathem_quant.versions.yml`), and when the targets have
 no windows of their own diathem keeps the defaults.
 
 | decision | evidence | effort |
 |---|---|---|
-| fragment tolerance by instrument class | mzML instrument metadata, scan filter strings (`ITMS`/`FTMS`) | easy |
+| fragment tolerance by instrument class | mzML instrument metadata, scan filter strings (`ITMS`/`FTMS`); measured from the calibrants for targeted runs (§13) | easy |
 | PRM or DIA | whether the targets have windows of their own | done for diathem's tolerance (§7) |
 | heavy/light labeling | paired peptidoforms in the library | moderate |
 | reachable fraction of the reference list | library and reference list, stripped sequences | easy |

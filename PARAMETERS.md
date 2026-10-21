@@ -11,6 +11,22 @@ fdr:    0.01
 This page lists every setting you might want to change. `nextflow.config` holds a few
 more that the pipeline needs internally; you can ignore them.
 
+## Settings the pipeline measures from your runs
+
+Some settings depend on the state of your runs (how far off their fragment m/z are, how their
+peptides elute, how wide their peaks are), so the pipeline measures them from your runs each time
+instead of using a fixed value. What it found is written to a table (see OUTPUTS.md); give a value
+for the setting to use your own instead.
+
+| setting | what is measured from your runs | to set it yourself |
+|---|---|---|
+| `fragment_mz_calibration`, `fragment_mz_calibration_min_offset` | how far each run's fragment m/z are off, and whether to correct them ([section 10](#10-acquisition-checks)) | `off`, or a minimum offset in Th |
+| `search_tolerance` | the fragment tolerance the searches need after the correction ([section 10](#10-acquisition-checks)) | `off`: the `-ftol` of your search arguments |
+| `rt_alignment`, `rt_alignment_half_window_seconds` | where each peptide elutes in each run, and how far from there its peak may lie ([section 7](#7-retention-time)) | `off`, or a number of seconds |
+| `pair_min_coelution` | how closely a light peptide's signal must follow its standard's to count ([section 8](#8-heavylight-channels-and-absolute-quantification)) | a number from 0 to 1 |
+| `pair_rt_tolerance_seconds` | how far apart a light's and its standard's peaks may lie, for the tools other than `standard_peak` ([section 8](#8-heavylight-channels-and-absolute-quantification)) | a number of seconds |
+| `encyclopedia_quant` | whether EncyclopeDIA's cross-run quantification is needed ([section 11](#11-quantification)) | `on` or `off` |
+
 ---
 
 ## 1. Required
@@ -96,7 +112,9 @@ The defaults suit an Orbitrap. For other instruments, set the fragment tolerance
 
 OpenSWATH's `-mz_extraction_window` is the full width of the window.
 
-Give every EncyclopeDIA search your run uses the same values. EncyclopeDIA's `-frag`
+Give every EncyclopeDIA search your run uses the same values. For targeted runs, the
+pipeline then measures the tolerance your runs need and searches at it
+([section 10](#10-acquisition-checks)); your value is where it starts. EncyclopeDIA's `-frag`
 chooses the fragment ions it uses (`HCD`: y ions; `CID`: b and y ions), not your
 instrument's fragmentation.
 
@@ -131,7 +149,7 @@ acquisition time in the file) is searched without windows, with a warning.
 | setting | default | |
 |---|---|---|
 | `rt_alignment` | `auto` | `auto`: as above. `off`: every peptide is looked for over the whole time its isolation window was acquired. Needs a spectral library (`blib`, `elib` or `dlib`) |
-| `rt_alignment_half_window_seconds` | `auto` | how far, in seconds, a peptide's peak may lie from where it is expected. `auto`: set for each run from how closely it agrees with its neighbours, between 10 and 30 seconds |
+| `rt_alignment_half_window_seconds` | `auto` | how far, in seconds, a peptide's peak may lie from where it is expected. `auto`: set for each run from how closely its standards' times agree with its neighbours' |
 
 | setting | default | |
 |---|---|---|
@@ -153,7 +171,7 @@ Leave `heavy_label` empty for label-free runs.
 |---|---|---|
 | `heavy_label` | `[]` | the heavy labels, e.g. `[{site: K, unimod: 'UniMod:259'}, {site: R, unimod: 'UniMod:267'}]`. `site` is a residue, `n_term` or `c_term` |
 | `standard_amounts` | `null` | the known pmol of your SIL internal standards ([INPUTS.md](INPUTS.md#known-amounts---standard_amounts)) |
-| `pair_min_coelution` | `0.7` | a light peptide and its standard elute together. With `primary_abundance: standard_peak` (the SIL template), a pair gets an amount only when the light's signal rises and falls with its standard's over the standard's peak: this is the lowest correlation of the two accepted, from 0 to 1 (1: they follow each other exactly). `0` turns the check off |
+| `pair_min_coelution` | `auto` | a light peptide and its standard elute together. With `primary_abundance: standard_peak` (the SIL template), a pair gets an amount only when the light's signal rises and falls with its standard's over the standard's peak: this is the lowest correlation of the two accepted. `auto` learns it from your runs: the pipeline also reads each light's signal moved away from its standard, where the light cannot be, and takes the correlation only 1 in 20 of those reach, so that a light that does not elute with its standard rarely passes. Or give a number from 0 to 1 (1: they follow each other exactly); `0` turns the check off. The value used is in `quant/<route>/pair_min_coelution.tsv` |
 | `pair_rt_tolerance_seconds` | `auto` | the same check for the other tools, which give only where each peak lies: a pair gets an amount only when its two peaks lie within this many seconds. `auto` takes half the typical width of your heavy standards' peaks in these runs; give a number of seconds to set it yourself, or `0` to turn the check off |
 | `complete_channels_skip_proteins` | `[]` | proteins that exist only as heavy, such as `['iRT_Tag']`: their peptides give no amount |
 | `min_consistency` | `0.0` | leave out measurements whose diathem `consistency` is lower |
@@ -190,14 +208,28 @@ are, using the run's own targets, each read in its own isolation window, and you
 corrects runs that are clearly off. Two different peptides with the same precursor m/z share a
 window and are left out of this check.
 Runs with wide isolation windows (DIA) are used as they are. What it found for every run is
-in `qc/fragment_mz_calibration.tsv`. The targets it finds in each run are also what the
+in `qc/fragment_mz_calibration.tsv`. The runs of `library_sheet` are checked and corrected the
+same way, with the library they are searched with (`qc/fragment_mz_calibration.chromatogram.tsv`).
+The runs of `background_sheet` are used as acquired: a background only needs to be roughly
+right.
+The targets it finds in each run are also what the
 retention-time alignment uses ([section 7](#7-retention-time)), so the runs are still read
 for that when the correction is off.
+
+After the correction, the same targets show how far each run's fragments still lie from
+where they should, and so how wide the search's fragment tolerance needs to be. With
+`search_tolerance: auto`, the EncyclopeDIA searches of these runs use the value measured on
+all your runs together instead of the `-ftol` you gave; a run it could not be measured in keeps
+your `-ftol`. Your `-ftol` is where the check starts looking, so give one wide enough for your
+instrument before any correction ([section 6](#6-instrument-settings)). The value used is in
+`qc/fragment_tolerance.<route>.tsv` (and `qc/fragment_tolerance.chromatogram.tsv` for the runs
+of `library_sheet`).
 
 | setting | default | |
 |---|---|---|
 | `fragment_mz_calibration` | `auto` | `auto`: measure every targeted run, and correct the runs whose fragments are off by more than `fragment_mz_calibration_min_offset`. `off`: use the runs as acquired. Needs a spectral library (`blib`, `openswath_blib`, `elib` or `dlib`) |
-| `fragment_mz_calibration_min_offset` | `0.1` | in Th (m/z). A run whose fragments are off by less than this anywhere is left as it is: correcting a well-calibrated run gains nothing |
+| `fragment_mz_calibration_min_offset` | `auto` | a run whose fragments are off by less than this anywhere is left as it is: correcting a well-calibrated run gains nothing. `auto`: a quarter of your search's fragment tolerance (`-ftol` in `dia_search_args`, `context_search_args` or `sheet_search_args`); or a number, in Th (m/z) |
+| `search_tolerance` | `auto` | `auto`: search the targeted runs at the fragment tolerance their own targets show after the correction (above). `off`: search at your `-ftol` |
 
 ## 11. Quantification
 
@@ -207,8 +239,9 @@ for that when the correction is off.
 | `run_diathem` | `true` | run diathem interference-corrected quantification |
 | `run_tric` | `false` | align features across runs. OpenSWATH DIA only |
 | `tric_args` | `--method LocalMST --realign_method lowess_cython --max_rt_diff 60 --mst:useRTCorrection True --mst:Stdev_multiplier 3.0 --fdr_cutoff 0.01 --max_fdr_quality 0.05` | TRIC options. Setting it replaces the whole default |
-| `quant_min_runs` | `2` | warn when a route has fewer runs: quantification needs several |
-| `quant_require_min_runs` | `false` | make that warning stop the run |
+| `quant_min_runs` | `5` | warn when a route has fewer runs: each SIL run is then aligned to the other runs there are instead of the 4 acquired nearest it, a single run is searched without retention-time windows, and quantification across runs is less reliable. The run goes on |
+| `quant_require_min_runs` | `false` | `true`: stop instead of warning |
+| `encyclopedia_quant` | `auto` | EncyclopeDIA's own quantification across all your runs (`abundance_encyclopedia`). `auto`: only when its amounts are the ones reported (`primary_abundance: encyclopedia`). `on`: also with another `primary_abundance`, for its amounts alongside. `off`: never. It is one job over every run, the slowest step of a large batch |
 | `quant_max_zero_ion_fraction` | `0.5` | warn when more than this fraction of measurements matched no fragment ion (on screen and in `warnings.txt`). If none matched any, the run stops |
 | `augment_context_with_diathem` | `false` | OpenSWATH PRM: give Context-MS diathem's statistics as extra features |
 
