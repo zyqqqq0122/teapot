@@ -78,6 +78,8 @@ def read_located(path, deltas, every=False):
         for r in csv.DictReader(fh, delimiter='\t'):
             if r.get('used', '').strip().lower() != 'true':
                 continue
+            if deltas and not any(is_label(m, deltas) for m in MASS.findall(r['modseq'])):
+                continue
             try:
                 t = float(r['apex_rt'])
             except (KeyError, ValueError):
@@ -199,7 +201,7 @@ def main():
             oof[te] = lowess(x[~te], y[~te])(x[te])
         resid = y - oof
         rsd = 1.4826 * float(np.median(np.abs(resid - np.median(resid))))
-        half = float(np.clip(4 * rsd, 10.0, 30.0)) if a.half_window == 'auto' else float(a.half_window)
+        half = 4 * rsd if a.half_window == 'auto' else float(a.half_window)
         full = lowess(x, y)
         expected = {k: float(v) for k, v in zip(ks, oof)}
         for k in cons:
