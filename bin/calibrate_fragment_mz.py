@@ -24,7 +24,8 @@ R_IIT = re.compile(rb'accession="MS:1000927"[^>]*?value="([^"]*)"')
 R_SWL = re.compile(rb'accession="MS:1000501"[^>]*?value="([^"]*)"')
 R_SWU = re.compile(rb'accession="MS:1000500"[^>]*?value="([^"]*)"')
 R_FILTER = re.compile(rb'accession="MS:1000512"[^>]*?value="([^"]*)"')
-R_PREC_IN_FILTER = re.compile(rb'\s[0-9.]+@')
+R_PREC_IN_FILTER = re.compile(rb'\s[0-9.]+@([a-z]+)[0-9.]*')
+R_RANGE_IN_FILTER = re.compile(rb'\s*\[[^\]]*\]')
 R_BPMZ = re.compile(rb'(accession="MS:1000504"[^>]*?value=")([^"]*)(")')
 R_LOWMZ = re.compile(rb'(accession="MS:1000528"[^>]*?value=")([^"]*)(")')
 R_HIGHMZ = re.compile(rb'(accession="MS:1000527"[^>]*?value=")([^"]*)(")')
@@ -75,7 +76,7 @@ def scan_meta(block):
 
 def scan_group(block):
     m = R_FILTER.search(block)
-    return R_PREC_IN_FILTER.sub(b' @', m.group(1)).decode() if m else ''
+    return R_RANGE_IN_FILTER.sub(b'', R_PREC_IN_FILTER.sub(rb' @\1', m.group(1))).decode() if m else ''
 
 
 def _array_kind(params):
