@@ -1,5 +1,6 @@
 include { SEARCH_DIA                   } from '../../modules/local/encyclopedia/search_dia'
 include { ALIGN_RETENTION_TIMES        } from '../../modules/local/runs/align_retention_times'
+include { CHOOSE_NEIGHBOURS            } from '../../modules/local/runs/choose_neighbours'
 include { ENCYCLOPEDIA_LIBEXPORT       } from '../../modules/local/encyclopedia/encyclopedia_libexport'
 include { ASSERT_QUANT_PRODUCTIVE      } from '../../modules/local/quant/assert_quant_productive'
 include { DIATHEM_QUANT                } from '../../modules/local/diathem/diathem_quant'
@@ -26,7 +27,6 @@ workflow ENCYCLOPEDIA_DIA {
     no_file
     diathem_ok
     located
-    acquired
     fragment_errors
     rt_alignment
     enc_quant
@@ -40,15 +40,17 @@ workflow ENCYCLOPEDIA_DIA {
     def sil = (heavy_label as List)?.size() > 0
     def warn_ch = Channel.empty()
 
+    def run_ids = samples.map { meta, _f, _ml -> meta.id }
+        .collectFile(name: 'samples.enc_dia.txt', newLine: true, sort: true)
+    def mine = samples.map { meta, _f, _ml -> [meta.id] }
+        .join(located.map { meta, t -> [meta.id, t] })
+        .map { _id, t -> t }
+    CHOOSE_NEIGHBOURS(run_ids, mine.collect().ifEmpty([]), library, heavy_label, 'enc_dia')
+    def neighbours = CHOOSE_NEIGHBOURS.out.neighbours
+
     def runs_in
     if (rt_alignment && sil && has_reference_list) {
-        def ids = samples.map { meta, _f, _ml -> meta.id }
-            .collectFile(name: 'samples.enc_dia.txt', newLine: true, sort: true)
-        def mine = samples.map { meta, _f, _ml -> [meta.id] }
-            .join(located.map { meta, t -> [meta.id, t] })
-            .map { _id, t -> t }
-        ALIGN_RETENTION_TIMES(ids, mine.collect().ifEmpty([]), acquired.collect().ifEmpty([]),
-                              library, reference_list, heavy_label, 'enc_dia')
+        ALIGN_RETENTION_TIMES(run_ids, mine.collect().ifEmpty([]), neighbours, library, reference_list, heavy_label, 'enc_dia')
         warn_ch = warn_ch.mix(ALIGN_RETENTION_TIMES.out.warnings.flatMap { Warnings.inFile(it, 'enc_dia') })
         def windows = ALIGN_RETENTION_TIMES.out.windows.flatten()
             .map { w -> [w.name - '.apex_windows.tsv', w] }

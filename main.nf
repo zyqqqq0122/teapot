@@ -474,8 +474,8 @@ workflow {
             def msg = "quantification cohort for ${route[0]}/${route[1]} is ${n} " +
                       "run(s), below quant_min_runs=${params.quant_min_runs}. " +
                       "Each SIL run's retention times are aligned to the other runs there " +
-                      "are instead of the 4 acquired nearest in time, a single run is " +
-                      "searched without retention-time windows, and cross-run quantification " +
+                      "are instead of up to 4 most like it, a single run to its library's " +
+                      "retention times, and cross-run quantification " +
                       "(EncyclopeDIA, diathem consistency, pyprophet, TRIC) is less reliable " +
                       "at this cohort size; identifications and per-run amounts are still reported."
             if (params.quant_require_min_runs) {
@@ -551,7 +551,6 @@ workflow {
     def warning_chs = []
     def runs_ready = REMOVE_SURVEY_SCANS.out.run
     def located  = Channel.empty()
-    def acquired = Channel.empty()
     def fragment_errors = Channel.empty()
     if ((mz_on || rt_on) && calibration_library) {
         def fragment_of = { meta -> meta.engine == 'openswath' ? [] :
@@ -561,7 +560,6 @@ workflow {
                               file(calibration_library), mz_on)
         runs_ready = CALIBRATE_FRAGMENT_MZ.out.run
         located    = CALIBRATE_FRAGMENT_MZ.out.located
-        acquired   = CALIBRATE_FRAGMENT_MZ.out.row
         fragment_errors = CALIBRATE_FRAGMENT_MZ.out.tolerance
         CALIBRATE_FRAGMENT_MZ.out.row
             .collectFile(name: 'fragment_mz_calibration.tsv', storeDir: "${params.outdir}/qc",
@@ -655,7 +653,7 @@ workflow {
             }
             ENCYCLOPEDIA_PRM(enc_prm_samples, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                          diathem_lib_ch, standard_amts_ch, params.heavy_label,
-                         enc_prm_targets, no_file, diathem_ok_enc_prm, located, acquired, fragment_errors,
+                         enc_prm_targets, no_file, diathem_ok_enc_prm, located, fragment_errors,
                          rt_ready, enc_quant)
             warning_chs << ENCYCLOPEDIA_PRM.out.warnings
         }
@@ -670,7 +668,7 @@ workflow {
             ENCYCLOPEDIA_DIA(by_route.enc_dia, PREPARE_LIBRARY_ENCYCLOPEDIA.out.library, fasta,
                          diathem_lib_ch, standard_amts_ch, params.heavy_label,
                          enc_dia_targets, enc_dia_has_reference_list, no_file,
-                         diathem_ok_enc_dia, located, acquired, fragment_errors, rt_ready, enc_quant)
+                         diathem_ok_enc_dia, located, fragment_errors, rt_ready, enc_quant)
             warning_chs << ENCYCLOPEDIA_DIA.out.warnings
         }
     }

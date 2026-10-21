@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import glob
 import json
 import os
 import re
 import sqlite3
 import sys
-from datetime import datetime
 
 import numpy as np
 
 MASS = re.compile(r'\[([+-]?\d+(?:\.\d+)?)\]')
 FOLDS = 10
 ROUNDS = 3
-COLS = ['sample_id', 'status', 'anchors', 'neighbours', 'residual_sd_seconds', 'half_window_seconds',
-        'precursors_with_window', 'windows_widened', 'acquired']
+COLS = ['sample_id', 'status', 'anchors', 'reference', 'neighbours', 'residual_sd_seconds', 'half_window_seconds',
+        'precursors_with_window', 'windows_widened']
 
 
 def is_label(text, deltas):
@@ -25,21 +25,6 @@ def is_label(text, deltas):
 def peptide_key(modseq, deltas):
     s = re.sub(r'^[A-Z-]?\.|\.[A-Z-]?$', '', modseq.strip())
     return MASS.sub(lambda m: '' if is_label(m.group(1), deltas) else '[%+.1f]' % float(m.group(1)), s)
-
-
-def read_acquired(paths):
-    out = {}
-    for p in paths:
-        with open(p, newline='') as fh:
-            for r in csv.DictReader(fh, delimiter='\t'):
-                t = (r.get('acquired') or '').strip()
-                if t:
-                    out[r['sample_id']] = t
-    return out
-
-
-def seconds(stamp):
-    return datetime.fromisoformat(stamp.replace('Z', '+00:00')).timestamp()
 
 
 def lowess(x, y, frac=0.3, rounds=3):
@@ -130,15 +115,43 @@ def warp_onto(runs, located, cons, rounds=ROUNDS):
     return cur
 
 
+def read_neighbours(path):
+    out = {}
+    with open(path, newline='') as fh:
+        for r in csv.DictReader(fh, delimiter='\t'):
+            out[r['sample_id']] = [n for n in (r.get('neighbours') or '').split(',') if n]
+    return out
+
+
+def library_times(path, deltas, keys):
+    con = sqlite3.connect(f'file:{os.path.abspath(path)}?mode=ro', uri=True)
+    out = {}
+    for modseq, rt in con.execute('SELECT PeptideModSeq, RTInSeconds FROM entries'):
+        k = peptide_key(modseq, deltas)
+        if k in keys and rt is not None:
+            out.setdefault(k, []).append(float(rt))
+    con.close()
+    return {k: float(np.median(v)) for k, v in out.items()}
+
+
+def out_of_fold(x, y):
+    oof = np.empty(len(x))
+    fold = np.arange(len(x)) % FOLDS
+    for f in range(FOLDS):
+        te = fold == f
+        oof[te] = lowess(x[~te], y[~te])(x[te])
+    resid = y - oof
+    return oof, 1.4826 * float(np.median(np.abs(resid - np.median(resid))))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--samples', required=True, help='the runs to align, one sample_id per line')
-    ap.add_argument('--located', nargs='*', default=[], help='<sample>.fragment_mz.targets.tsv of the runs that have one')
-    ap.add_argument('--acquired', nargs='*', default=[], help="the m/z step's summary rows (sample_id, acquired)")
+    ap.add_argument('--located', required=True, help='folder of <sample>.fragment_mz.targets.tsv')
+    ap.add_argument('--neighbours', required=True, help="CHOOSE_NEIGHBOURS's table: each run's neighbours")
     ap.add_argument('--library', required=True, help='the search library (.dlib or .elib)')
     ap.add_argument('--reference', required=True, help='reference list')
     ap.add_argument('--labels', default='[]', help='JSON list of heavy labels with their delta; [] for label-free')
-    ap.add_argument('--neighbours', type=int, default=4)
     ap.add_argument('--half-window', default='auto', help='seconds, or auto')
     ap.add_argument('--min-anchors', type=int, default=20)
     ap.add_argument('--out-dir', required=True)
@@ -150,57 +163,50 @@ def main():
     os.makedirs(a.out_dir, exist_ok=True)
     samples = sorted({l.strip() for l in open(a.samples) if l.strip()})
     located, found = {}, {}
-    for p in a.located:
+    for p in glob.glob(os.path.join(a.located, '*.fragment_mz.targets.tsv')):
         sid = os.path.basename(p).split('.fragment_mz.targets.tsv')[0]
         if sid in samples:
             located[sid] = read_located(p, deltas)
             found[sid] = read_located(p, deltas, every=True)
-    acquired = read_acquired(a.acquired)
-    stamps = {sid: seconds(acquired[sid]) if sid in acquired else None for sid in samples}
+    neighbours = read_neighbours(a.neighbours)
     ref = read_reference(a.reference, deltas)
     lib = read_library(a.library, deltas, ref)
+    lib_rt = library_times(a.library, deltas, set(lib))
     warnings, rows = [], []
-    usable = [s for s in samples if s in located and len(located[s]) >= a.min_anchors and stamps[s] is not None]
-    order = {s: i for i, s in enumerate(samples)}
 
     for sid in samples:
-        row = dict(sample_id=sid, status='', anchors=len(located.get(sid, {})), neighbours='',
-                   residual_sd_seconds='', half_window_seconds='', precursors_with_window=0,
-                   windows_widened=0, acquired=acquired.get(sid, ''))
+        mine = located.get(sid, {})
+        row = dict(sample_id=sid, status='', anchors=len(mine), reference='', neighbours='',
+                   residual_sd_seconds='', half_window_seconds='', precursors_with_window=0, windows_widened=0)
         out = os.path.join(a.out_dir, f'{sid}.apex_windows.tsv')
         with open(out, 'w') as fh:
             fh.write('PeptideModSeq\tPrecursorCharge\tMinApexRTInSeconds\tMaxApexRTInSeconds\n')
-        others = [s for s in usable if s != sid]
-        if sid not in usable:
+        if len(mine) < a.min_anchors:
             row['status'] = ('not aligned: no standards located (not a targeted mzML run)' if sid not in located
-                             else 'not aligned: the run states no acquisition time' if stamps.get(sid) is None
-                             else f'not aligned: {row["anchors"]} anchors located, {a.min_anchors} needed')
+                             else f'not aligned: {len(mine)} anchors located, {a.min_anchors} needed')
             warnings.append(f'{sid}: {row["status"]}; searched without retention-time windows')
             rows.append(row)
             continue
-        if not others:
-            row['status'] = 'not aligned: no other run to align to'
+        near = [s for s in neighbours.get(sid, []) if s in located and s != sid]
+        candidates = [('library', lib_rt, '')]
+        if near:
+            candidates.insert(0, ('neighbours', warp_onto(near, located, None), ','.join(near)))
+        best = None
+        for name, cons, label in candidates:
+            ks = [k for k in mine if k in cons]
+            if len(ks) < a.min_anchors:
+                continue
+            x = np.array([cons[k] for k in ks])
+            y = np.array([mine[k] for k in ks])
+            oof, rsd = out_of_fold(x, y)
+            if best is None or rsd < best[0]:
+                best = (rsd, name, cons, label, ks, x, y, oof)
+        if best is None:
+            row['status'] = f'not aligned: fewer than {a.min_anchors} anchors shared with its neighbours or the library'
             warnings.append(f'{sid}: {row["status"]}; searched without retention-time windows')
             rows.append(row)
             continue
-        near = sorted(others, key=lambda s: (abs(stamps[s] - stamps[sid]), order[s]))[:a.neighbours]
-        cons = warp_onto(near, located, None)
-        mine = located[sid]
-        ks = [k for k in mine if k in cons]
-        if len(ks) < a.min_anchors:
-            row['status'] = f'not aligned: {len(ks)} anchors shared with the neighbours, {a.min_anchors} needed'
-            warnings.append(f'{sid}: {row["status"]}; searched without retention-time windows')
-            rows.append(row)
-            continue
-        x = np.array([cons[k] for k in ks])
-        y = np.array([mine[k] for k in ks])
-        oof = np.empty(len(ks))
-        fold = np.arange(len(ks)) % FOLDS
-        for f in range(FOLDS):
-            te = fold == f
-            oof[te] = lowess(x[~te], y[~te])(x[te])
-        resid = y - oof
-        rsd = 1.4826 * float(np.median(np.abs(resid - np.median(resid))))
+        rsd, name, cons, label, ks, x, y, oof = best
         half = 4 * rsd if a.half_window == 'auto' else float(a.half_window)
         full = lowess(x, y)
         expected = {k: float(v) for k, v in zip(ks, oof)}
@@ -221,15 +227,15 @@ def main():
                 for modseq, z in sorted(lib[k]):
                     fh.write(f'{modseq}\t{z}\t{lo:.2f}\t{hi:.2f}\n')
                     n += 1
-        row.update(status='aligned', neighbours=','.join(near), residual_sd_seconds=round(rsd, 2),
+        row.update(status='aligned', reference=name, neighbours=label, residual_sd_seconds=round(rsd, 2),
                    half_window_seconds=round(half, 2), precursors_with_window=n, windows_widened=widened)
         if rsd > 5:
-            warnings.append(f'{sid}: retention times agree with the neighbouring runs to {rsd:.1f} s (robust SD); '
-                            f'windows of +/- {half:.0f} s')
+            warnings.append(f'{sid}: retention times agree with its {"neighbouring runs" if name == "neighbours" else "library"} '
+                            f'to {rsd:.1f} s (robust SD); windows of +/- {half:.0f} s')
         rows.append(row)
-        print(f'{sid}: {len(ks)} anchors, neighbours {",".join(near)}; residual SD {rsd:.1f} s; '
-              f'+/- {half:.1f} s windows for {n} precursors; {widened} peptides\' windows widened to their '
-              f'standard\'s own apex in the run')
+        print(f'{sid}: {len(ks)} anchors, aligned to {"its neighbours " + label if name == "neighbours" else "the library"}; '
+              f'residual SD {rsd:.1f} s; +/- {half:.1f} s windows for {n} precursors; {widened} peptides\' windows widened '
+              f'to their standard\'s own apex in the run')
 
     with open(a.summary, 'w', newline='') as fh:
         w = csv.DictWriter(fh, fieldnames=COLS, delimiter='\t', lineterminator='\n')

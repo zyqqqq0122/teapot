@@ -12,7 +12,7 @@ process ALIGN_RETENTION_TIMES {
     input:
     path  samples
     path  located,        stageAs: 'located/*'
-    path  acquired,       stageAs: 'acquired/*'
+    path  neighbours,     stageAs: 'neighbours/*'
     path  library,        stageAs: 'library/*'
     path  reference_list, stageAs: 'ref/*'
     val   heavy_label
@@ -40,8 +40,8 @@ process ALIGN_RETENTION_TIMES {
     # bin/align_retention_times.py ${Fingerprint.of("${projectDir}/bin/align_retention_times.py")}: a changed script reruns the step
     align_retention_times.py \\
         --samples     ${samples} \\
-        --located     \$(find -L located -name '*.fragment_mz.targets.tsv' 2>/dev/null | sort) \\
-        --acquired    \$(find -L acquired -name '*.fragment_mz.row.tsv' 2>/dev/null | sort) \\
+        --located     located \\
+        --neighbours  neighbours/* \\
         --library     library/* \\
         --reference   ref/* \\
         --labels      '${label_json}' \\

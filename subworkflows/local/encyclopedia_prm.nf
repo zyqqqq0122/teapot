@@ -1,5 +1,6 @@
 include { CONTEXT_SEARCH               } from '../../modules/local/encyclopedia/context_search'
 include { ALIGN_RETENTION_TIMES        } from '../../modules/local/runs/align_retention_times'
+include { CHOOSE_NEIGHBOURS            } from '../../modules/local/runs/choose_neighbours'
 include { ASSERT_SEARCH_PRODUCTIVE     } from '../../modules/local/context_ms/assert_search_productive'
 include { ENCYCLOPEDIA_LIBEXPORT       } from '../../modules/local/encyclopedia/encyclopedia_libexport'
 include { ENCYCLOPEDIA_LIBEXPORT_PER_SAMPLE         } from '../../modules/local/encyclopedia/encyclopedia_libexport_per_sample'
@@ -26,7 +27,6 @@ workflow ENCYCLOPEDIA_PRM {
     no_file
     diathem_ok
     located
-    acquired
     fragment_errors
     rt_alignment
     enc_quant
@@ -40,15 +40,17 @@ workflow ENCYCLOPEDIA_PRM {
     def sil = (heavy_label as List)?.size() > 0
     def warn_ch = Channel.empty()
 
+    def run_ids = samples.map { meta, _f, _ml -> meta.id }
+        .collectFile(name: 'samples.enc_prm.txt', newLine: true, sort: true)
+    def mine = samples.map { meta, _f, _ml -> [meta.id] }
+        .join(located.map { meta, t -> [meta.id, t] })
+        .map { _id, t -> t }
+    CHOOSE_NEIGHBOURS(run_ids, mine.collect().ifEmpty([]), elib, heavy_label, 'enc_prm')
+    def neighbours = CHOOSE_NEIGHBOURS.out.neighbours
+
     def runs_in
     if (rt_alignment && sil) {
-        def ids = samples.map { meta, _f, _ml -> meta.id }
-            .collectFile(name: 'samples.enc_prm.txt', newLine: true, sort: true)
-        def mine = samples.map { meta, _f, _ml -> [meta.id] }
-            .join(located.map { meta, t -> [meta.id, t] })
-            .map { _id, t -> t }
-        ALIGN_RETENTION_TIMES(ids, mine.collect().ifEmpty([]), acquired.collect().ifEmpty([]),
-                              elib, targets_prm, heavy_label, 'enc_prm')
+        ALIGN_RETENTION_TIMES(run_ids, mine.collect().ifEmpty([]), neighbours, elib, targets_prm, heavy_label, 'enc_prm')
         warn_ch = warn_ch.mix(ALIGN_RETENTION_TIMES.out.warnings.flatMap { Warnings.inFile(it, 'enc_prm') })
         def windows = ALIGN_RETENTION_TIMES.out.windows.flatten()
             .map { w -> [w.name - '.apex_windows.tsv', w] }
