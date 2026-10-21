@@ -10,6 +10,7 @@ process DERIVE_PAIR_MIN_COELUTION {
 
     input:
     path tables, stageAs: 'standard_peak/*'
+    path neighbours, stageAs: 'neighbours/*'
     val  route
 
     output:
@@ -17,9 +18,10 @@ process DERIVE_PAIR_MIN_COELUTION {
     path "versions.yml",           emit: versions
 
     script:
+    def nb = neighbours.name == 'NO_FILE' ? '' : "--neighbours ${neighbours}"
     """
     # bin/derive_pair_min_coelution.py ${Fingerprint.of("${projectDir}/bin/derive_pair_min_coelution.py")}: a changed script reruns the step
-    derive_pair_min_coelution.py --tables standard_peak --setting '${params.pair_min_coelution}' \\
+    derive_pair_min_coelution.py --tables standard_peak ${nb} --setting '${params.pair_min_coelution}' \\
         --out pair_min_coelution.tsv
 
     cat <<-EOF > versions.yml
@@ -31,7 +33,7 @@ process DERIVE_PAIR_MIN_COELUTION {
 
     stub:
     """
-    printf 'setting\\tmin_coelution\\tsource\\n${params.pair_min_coelution}\\t0.7\\tstub\\n' > pair_min_coelution.tsv
+    printf 'sample_id\\tsetting\\tmin_coelution\\tchance_pass\\tmoved_traces\\tpooled_with\\tsource\\n*\\t${params.pair_min_coelution}\\t0.7\\t\\t0\\t\\tstub\\n' > pair_min_coelution.tsv
     echo '"${task.process}": {python: stub}' > versions.yml
     """
 }

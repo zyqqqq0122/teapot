@@ -53,12 +53,14 @@ process FINALIZE_QUANT {
     PRIMARY = "${params.primary_abundance}"
     LABEL   = json.loads(r'''${label_json}''')
     MTOL    = float("${mod_tol}")
-    TOLS    = [p for p in glob.glob('tolerance/*') if os.path.basename(p) != 'NO_FILE']
-    TOL     = (float(list(csv.DictReader(open(TOLS[0]), delimiter='\\t'))[0]['tolerance_seconds'])
-               if TOLS else 0.0)
-    COELS   = [p for p in glob.glob('coelution/*') if os.path.basename(p) != 'NO_FILE']
-    MIN_COEL = (float(list(csv.DictReader(open(COELS[0]), delimiter='\\t'))[0]['min_coelution']) if COELS
-                else float("${params.pair_min_coelution}") if "${params.pair_min_coelution}" != 'auto' else 0.7)
+    def per_run(pattern, column, default):
+        files = [p for p in glob.glob(pattern) if os.path.basename(p) != 'NO_FILE']
+        table = {r['sample_id']: float(r[column]) for r in csv.DictReader(open(files[0]), delimiter='\\t')} if files else {}
+        other = table.pop('*', default)
+        return lambda sid: table.get(sid, other)
+    TOL      = per_run('tolerance/*', 'tolerance_seconds', 0.0)
+    MIN_COEL = per_run('coelution/*', 'min_coelution',
+                       float("${params.pair_min_coelution}") if "${params.pair_min_coelution}" != 'auto' else 0.7)
     RUNS     = [l.split('\\t')[1].strip() for p in glob.glob('runs/*') if os.path.basename(p) != 'NO_FILE'
                 for l in open(p) if l.strip()]
     MIN_IDS = int("${params.search_min_reference_ids}")
@@ -311,12 +313,12 @@ process FINALIZE_QUANT {
                     d[0], d[1], d[2], d[3] = True, num(o.get(RTQ)), num(o.get('_shared')), num(o.get('_coel'))
         return det
 
-    def co_elute(det, p, z):
+    def co_elute(sid, det, p, z):
         if PRIMARY == 'standard_peak':
-            c = det[(p, z, 'light')][3]
-            return MIN_COEL <= 0 or c is None or c >= MIN_COEL
-        a, b = det[(p, z, 'light')][1], det[(p, z, 'heavy')][1]
-        return TOL <= 0 or a is None or b is None or abs(a - b) <= TOL
+            c, m = det[(p, z, 'light')][3], MIN_COEL(sid)
+            return m <= 0 or c is None or c >= m
+        a, b, t = det[(p, z, 'light')][1], det[(p, z, 'heavy')][1], TOL(sid)
+        return t <= 0 or a is None or b is None or abs(a - b) <= t
 
     n_ids = []
     with open('quant_summary.tsv', 'w', newline='') as f:
@@ -338,7 +340,7 @@ process FINALIZE_QUANT {
                 n_ids.append((sid, counts[0] + counts[2]))
                 w.writerow([ROUTE, sid, len(paired)] + counts +
                            [len({p for p, _z in pairs}),
-                            len({p for p, z in quant if co_elute(det, p, z)})])
+                            len({p for p, z in quant if co_elute(sid, det, p, z)})])
         else:
             w.writerow(['route', 'sample_id', 'reference_peptides', 'detected', 'quantified'])
             for sid in samples:

@@ -40,7 +40,7 @@ workflow PREPARE_CHROMATOGRAM_LIBRARY {
 
     def run_files = runs.ready.mix(converted)
     def warn_ch = Channel.empty()
-    def tol_ch = Channel.value([value: null, runs: [] as Set])
+    def tol_ch = Channel.value([value: null, runs: [:]])
     if (calibrate && Args.mode(params.fragment_mz_calibration) == 'auto') {
         def no_file = file("${projectDir}/assets/NO_FILE")
         CALIBRATE_FRAGMENT_MZ(run_files.map { condition, f ->
@@ -53,13 +53,13 @@ workflow PREPARE_CHROMATOGRAM_LIBRARY {
         warn_ch = CALIBRATE_FRAGMENT_MZ.out.warnings.flatMap { Warnings.inFile(it, "calibration (${name})") }
         run_files = CALIBRATE_FRAGMENT_MZ.out.run.map { meta, f, _rl -> tuple(meta.condition, f) }
         DERIVE_SEARCH_TOLERANCE(CALIBRATE_FRAGMENT_MZ.out.tolerance.map { _m, f -> f }.collect().ifEmpty([no_file]),
-                                Args.fragmentTolerance(params.sheet_search_args), name)
+                                no_file, Args.fragmentTolerance(params.sheet_search_args), name)
         tol_ch = DERIVE_SEARCH_TOLERANCE.out.tolerance.combine(DERIVE_SEARCH_TOLERANCE.out.runs)
             .map { t, r -> Args.readTolerance(t, r) }
             .first()
         tol_ch.subscribe { t -> log.info Warnings.fragmentTolerance(t, name, params.sheet_search_args) }
     }
-    def args_of = { Map t, List fs -> fs.every { t.runs.contains(it.baseName) } ? Args.withBatchTolerance(params.sheet_search_args, t)
+    def args_of = { Map t, List fs -> fs.every { t.runs.containsKey(it.baseName) } ? Args.withBatchTolerance(params.sheet_search_args, t)
                                                                                 : Args.flat(params.sheet_search_args) }
 
     by_count = run_files

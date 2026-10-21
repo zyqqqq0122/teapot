@@ -10,6 +10,7 @@ process DERIVE_PAIR_RT_TOLERANCE {
 
     input:
     path base_long
+    path neighbours, stageAs: 'neighbours/*'
     val  route
 
     output:
@@ -17,10 +18,11 @@ process DERIVE_PAIR_RT_TOLERANCE {
     path "versions.yml",          emit: versions
 
     script:
+    def nb = neighbours.name == 'NO_FILE' ? '' : "--neighbours ${neighbours}"
     """
     # bin/derive_pair_rt_tolerance.py ${Fingerprint.of("${projectDir}/bin/derive_pair_rt_tolerance.py")}: a changed script reruns the step
     derive_pair_rt_tolerance.py --base ${base_long} --primary ${params.primary_abundance} --fdr ${params.fdr} \\
-        --setting '${params.pair_rt_tolerance_seconds}' --out pair_rt_tolerance.tsv
+        --setting '${params.pair_rt_tolerance_seconds}' ${nb} --out pair_rt_tolerance.tsv
 
     cat <<-EOF > versions.yml
     "${task.process}":
@@ -30,7 +32,7 @@ process DERIVE_PAIR_RT_TOLERANCE {
 
     stub:
     """
-    printf 'setting\\ttolerance_seconds\\tsource\\n${params.pair_rt_tolerance_seconds}\\t9\\tstub\\n' > pair_rt_tolerance.tsv
+    printf 'sample_id\\tsetting\\ttolerance_seconds\\tpooled_with\\tsource\\n*\\t${params.pair_rt_tolerance_seconds}\\t9\\t\\tstub\\n' > pair_rt_tolerance.tsv
     echo '"${task.process}": {python: stub}' > versions.yml
     """
 }

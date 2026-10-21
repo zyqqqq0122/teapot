@@ -77,7 +77,7 @@ workflow OPENSWATH_DIA {
 
     def tolerance_ch = Channel.value(no_file)
     if ((heavy_label as List)?.size() > 0) {
-        DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_OPENSWATH_DIA.out.long, 'osw_dia')
+        DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_OPENSWATH_DIA.out.long, no_file, 'osw_dia')
         DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'osw_dia') }
         tolerance_ch = DERIVE_PAIR_RT_TOLERANCE.out.tolerance
     }

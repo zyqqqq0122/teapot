@@ -51,10 +51,16 @@ class Args {
 		def lines = java.nio.file.Files.readAllLines(tsv as java.nio.file.Path)
 		def head = lines[0].split('\t', -1), cells = lines[1].split('\t', -1)
 		def at = cells[head.findIndexOf { it == 'runs_at_it' }] as int
-		if (at == 0) return [value: null, runs: [] as Set]
-		def ids = java.nio.file.Files.readAllLines(runs as java.nio.file.Path).drop(1).findAll { it }
-			.collect { it.split('\t', -1)[0] }
-		return [value: cells[head.findIndexOf { it == 'search_tolerance' }] as double, runs: new HashSet(ids)]
+		def rows = java.nio.file.Files.readAllLines(runs as java.nio.file.Path)
+		def cols = rows[0].split('\t', -1) as List
+		def own = rows.drop(1).findAll { it }.collect { it.split('\t', -1) }
+			.findAll { it[cols.indexOf('source')] == 'measured' }
+			.collectEntries { [(it[0]): it[cols.indexOf('searched_at')] as double] }
+		return [value: at == 0 ? null : cells[head.findIndexOf { it == 'search_tolerance' }] as double, runs: own]
+	}
+
+	static String withRunTolerance(Object searchArgs, Map t, String sid) {
+		return t.runs.containsKey(sid) ? withFragmentTolerance(searchArgs, t.runs[sid]) : flat(searchArgs)
 	}
 
 	static String inherit(Object searchArgs) {

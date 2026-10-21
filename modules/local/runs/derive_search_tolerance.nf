@@ -10,6 +10,7 @@ process DERIVE_SEARCH_TOLERANCE {
 
     input:
     path counts, stageAs: 'counts/*'
+    path neighbours, stageAs: 'neighbours/*'
     val  fragment
     val  where
 
@@ -19,9 +20,10 @@ process DERIVE_SEARCH_TOLERANCE {
     path "versions.yml",                          emit: versions
 
     script:
+    def nb = neighbours.name == 'NO_FILE' ? '' : "--neighbours ${neighbours}"
     """
     # bin/derive_search_tolerance.py ${Fingerprint.of("${projectDir}/bin/derive_search_tolerance.py")}: a changed script reruns the step
-    derive_search_tolerance.py --counts counts \\
+    derive_search_tolerance.py --counts counts ${nb} \\
         --fragment-tolerance ${fragment[0]} --fragment-unit ${fragment[1]} \\
         --setting ${Args.mode(params.search_tolerance)} --where ${where} \\
         --out fragment_tolerance.${where}.tsv --runs-out fragment_tolerance.${where}.runs.tsv
@@ -36,7 +38,7 @@ process DERIVE_SEARCH_TOLERANCE {
     stub:
     """
     printf 'route\\tsetting\\tsearch_tolerance\\tunit\\truns_at_it\\tsource\\n${where}\\t${Args.mode(params.search_tolerance)}\\t${fragment[0]}\\t${fragment[1] == 'th' ? 'Th' : 'ppm'}\\t0\\tstub\\n' > fragment_tolerance.${where}.tsv
-    printf 'sample_id\\tfragment_errors\\town_search_tolerance\\tsearched_at\\n' > fragment_tolerance.${where}.runs.tsv
+    printf 'sample_id\\tfragment_errors\\town_search_tolerance\\tpooled_with\\tsearched_at\\tsource\\n' > fragment_tolerance.${where}.runs.tsv
     echo '"${task.process}": {python: stub}' > versions.yml
     """
 }

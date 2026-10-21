@@ -63,11 +63,11 @@ workflow ENCYCLOPEDIA_DIA {
     DERIVE_SEARCH_TOLERANCE(fragment_errors.map { meta, f -> tuple(meta.id, f) }
                                 .join(samples.map { meta, _f, _ml -> tuple(meta.id, true) })
                                 .map { _id, f, _s -> f }.collect().ifEmpty([no_file]),
-                            Args.fragmentTolerance(params.dia_search_args), 'enc_dia')
+                            neighbours, Args.fragmentTolerance(params.dia_search_args), 'enc_dia')
     def tol_ch = DERIVE_SEARCH_TOLERANCE.out.tolerance.combine(DERIVE_SEARCH_TOLERANCE.out.runs)
         .map { t, r -> Args.readTolerance(t, r) }
         .first()
-    def args_of = { Map t, String sid -> t.runs.contains(sid) ? Args.withBatchTolerance(params.dia_search_args, t) : Args.flat(params.dia_search_args) }
+    def args_of = { Map t, String sid -> Args.withRunTolerance(params.dia_search_args, t, sid) }
     def batch_args = tol_ch.map { t -> Args.withBatchTolerance(params.dia_search_args, t) }
     tol_ch.subscribe { t -> log.info Warnings.fragmentTolerance(t, 'enc_dia', params.dia_search_args) }
     SEARCH_DIA(runs_in.combine(library).combine(tol_ch).map { meta, dia, w, lib, t -> tuple(meta, dia, lib, w, args_of(t, meta.id)) }, fasta)
@@ -140,7 +140,7 @@ workflow ENCYCLOPEDIA_DIA {
     }
     def coelution_ch = Channel.value(no_file)
     if (sil && has_reference_list) {
-        DERIVE_PAIR_MIN_COELUTION(standard_peak_ch, 'enc_dia')
+        DERIVE_PAIR_MIN_COELUTION(standard_peak_ch, neighbours, 'enc_dia')
         coelution_ch = DERIVE_PAIR_MIN_COELUTION.out.min_coelution
         if (params.primary_abundance == 'standard_peak') {
             coelution_ch.subscribe { log.info Warnings.minCoelution(it, 'enc_dia') }
@@ -154,7 +154,7 @@ workflow ENCYCLOPEDIA_DIA {
 
     def tolerance_ch = Channel.value(no_file)
     if (sil) {
-        DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, 'enc_dia')
+        DERIVE_PAIR_RT_TOLERANCE(MERGE_QUANT_ENCYCLOPEDIA_DIA.out.long, neighbours, 'enc_dia')
         if (params.primary_abundance != 'standard_peak') {
             DERIVE_PAIR_RT_TOLERANCE.out.tolerance.subscribe { log.info Warnings.tolerance(it, 'enc_dia') }
         }

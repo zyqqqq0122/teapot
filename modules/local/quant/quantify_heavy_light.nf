@@ -58,11 +58,14 @@ process QUANTIFY_HEAVY_LIGHT {
     MIN_CONS  = float("${min_consistency}")
     FDR       = float("${params.fdr}")
     SKIP_PROT = json.loads(r'''${skip_json}''')
-    TOL       = float(list(csv.DictReader(open('${tolerance}'),
-                                        delimiter='\\t'))[0]['tolerance_seconds'])
-    COELS     = [p for p in glob.glob('coelution/*') if os.path.basename(p) != 'NO_FILE']
-    MIN_COEL  = (float(list(csv.DictReader(open(COELS[0]), delimiter='\\t'))[0]['min_coelution']) if COELS
-                 else float("${params.pair_min_coelution}") if "${params.pair_min_coelution}" != 'auto' else 0.7)
+    def per_run(files, column, default):
+        files = [p for p in files if os.path.basename(p) != 'NO_FILE']
+        table = {r['sample_id']: float(r[column]) for r in csv.DictReader(open(files[0]), delimiter='\\t')} if files else {}
+        other = table.pop('*', default)
+        return lambda sid: table.get(sid, other)
+    TOL       = per_run(['${tolerance}'], 'tolerance_seconds', 0.0)
+    MIN_COEL  = per_run(glob.glob('coelution/*'), 'min_coelution',
+                        float("${params.pair_min_coelution}") if "${params.pair_min_coelution}" != 'auto' else 0.7)
 
     heavy_accs = { r["unimod"] for r in LABEL }
     if not heavy_accs:
@@ -234,12 +237,14 @@ process QUANTIFY_HEAVY_LIGHT {
                   file=sys.stderr)
 
     gap = (pairs['light_rt_seconds'] - pairs['heavy_rt_seconds']).abs()
-    def co_eluting(method, g, c):
+    def co_eluting(sid, method, g, c):
         if method == 'standard_peak':
-            return pd.NA if (MIN_COEL <= 0 or pd.isna(c)) else bool(c >= MIN_COEL)
-        return pd.NA if (TOL <= 0 or pd.isna(g)) else bool(g <= TOL)
-    pairs['co_eluting'] = pd.array([co_eluting(m, g, c) for m, g, c in
-                                    zip(pairs['method'], gap, pairs['coelution'])], dtype='boolean')
+            m = MIN_COEL(sid)
+            return pd.NA if (m <= 0 or pd.isna(c)) else bool(c >= m)
+        t = TOL(sid)
+        return pd.NA if (t <= 0 or pd.isna(g)) else bool(g <= t)
+    pairs['co_eluting'] = pd.array([co_eluting(sid, m, g, c) for sid, m, g, c in
+                                    zip(pairs['sample_id'], pairs['method'], gap, pairs['coelution'])], dtype='boolean')
 
     std = pd.read_csv(STD, sep=None, engine='python')
     lc = {c.lower(): c for c in std.columns}
