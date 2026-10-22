@@ -212,7 +212,7 @@ def main():
                          "large amount of chromatogram work per sample.")
     args = ap.parse_args()
 
-    shutil.copy(args.input_dlib, args.output_dlib)
+    shutil.copyfile(args.input_dlib, args.output_dlib)
 
     con = sqlite3.connect(args.output_dlib)
     cur = con.cursor()

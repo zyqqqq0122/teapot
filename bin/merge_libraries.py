@@ -30,7 +30,7 @@ def main():
     ap.add_argument("--out", required=True, help="Output .dlib path.")
     args = ap.parse_args()
 
-    shutil.copy(args.primary, args.out)
+    shutil.copyfile(args.primary, args.out)
 
     con = sqlite3.connect(args.out)
     cur = con.cursor()

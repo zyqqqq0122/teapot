@@ -508,7 +508,7 @@ def main():
     label_spec = json.loads(args.labels)
     ion_types = tuple(x.strip() for x in args.ion_types.split(','))
 
-    shutil.copy(args.inp, args.out)
+    shutil.copyfile(args.inp, args.out)
     con = sqlite3.connect(args.out)
 
     fmt = detect_format(con)

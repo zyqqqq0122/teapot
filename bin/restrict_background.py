@@ -85,7 +85,7 @@ def main():
     else:
         keep = listed(a.peptides)
         what = '%d peptides listed in %s' % (len(keep), os.path.basename(a.peptides))
-    shutil.copy(a.dlib, a.out)
+    shutil.copyfile(a.dlib, a.out)
     con = sqlite3.connect(a.out)
     con.execute('CREATE TEMP TABLE keep (s TEXT PRIMARY KEY)')
     con.executemany('INSERT INTO keep VALUES (?)', [(s,) for s in keep])
