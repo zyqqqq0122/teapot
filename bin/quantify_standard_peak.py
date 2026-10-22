@@ -201,7 +201,8 @@ def peak(Hrt, Hx, apex_index, max_half):
 def measure(Hrt, Hx, Lrt, Lx, apex_index, max_half, width):
     a, lo, hi = peak(Hrt, Hx, apex_index, max_half)
     t0, t1 = Hrt[lo], Hrt[hi]
-    ha, la = area(Hrt, Hx, t0, t1), area(Lrt, Lx, t0, t1)
+    Li = np.column_stack([np.interp(Hrt, Lrt, Lx[:, j]) for j in range(Lx.shape[1])])
+    ha, la = area(Hrt, Hx, t0, t1), area(Hrt, Li, t0, t1)
     out = dict(apex=Hrt[a], start=t0, stop=t1)
     if ha.max() <= 0:
         return dict(out, status='heavy without signal')
