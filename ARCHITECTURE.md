@@ -1401,6 +1401,11 @@ end to end.
   one or two other runs in a batch found them among its 4 neighbours, but the median of the 4 came
   from the other setup's runs, and its windows came out several times wider than its own setup's
   runs give. A run now keeps only the closest neighbours whose median predicts its standards best.
+* **A copy of a write-protected input was write-protected too.** Four steps copied an input
+  library with `shutil.copy`, which also copies the file's permissions, and then wrote into the
+  copy, so a `.blib` or background library its owner could not write stopped the run at its
+  first library step. They now copy the content only (`shutil.copyfile`), as
+  `remove_survey_scans.py` already did.
 * EncyclopeDIA's per-run Percolator runs in mix-max mode (`-y`) on an input where each
   target has already competed with its own decoy (one PSM per library entry). Rerun on the
   same feature files with target-decoy competition (`-Y`), it gave practically the same
