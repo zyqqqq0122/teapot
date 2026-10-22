@@ -1002,7 +1002,11 @@ own iRT step).
   median of the peaks found without that limit), so a peak running into a neighbour or a raised
   baseline stops at the same multiple of the chromatography's peak width on any gradient. The heavy's 12 strongest library peaks whose light counterparts
   are in the light entry (same m/z, or apart by the labels the ion holds) are integrated as
-  read, not averaged, in each form's own window; one under 5 % of the strongest heavy area
+  read, not averaged, in each form's own window, the heavy over its scans between the
+  boundaries and the light read at the heavy's scan times (linear between its own scans), so
+  that both forms cover the same span: the two forms are scanned at different moments of the
+  cycle, and the light's own scans inside the boundaries miss up to a cycle at each end; one
+  under 5 % of the strongest heavy area
   is not used, and one more than 2-fold off the others' L/H is dropped as interfered. The
   co-elution (the Pearson correlation of the two forms' 3-scan averaged traces summed over
   the fragments used, at the heavy's scans from one median standard peak width of the run
@@ -1379,6 +1383,12 @@ end to end.
   strongest fragments could be in one sum only, which moved some ratios several-fold
   from a sum over the same fragments. A ratio now sums the fragments both forms share
   (§8).
+* **Light and heavy integrated over different spans.** Compared with Skyline on the same runs,
+  `standard_peak`'s ratios read slightly low across the board. The two forms are scanned at
+  different moments of the cycle, and the light was integrated over its own scans between the
+  standard's boundaries, which begin up to a cycle after the first boundary and end up to a cycle
+  before the last, so the light's area missed part of the peak's flanks. The light is now read at
+  the standard's scan times, as the co-elution already was, and both forms cover the same span (§8).
 * **Acquisition time is no measure of how alike two runs elute.** A laboratory can alternate two
   LC columns or systems, or change the column between plates, and runs acquired an hour apart then
   elute like other days' runs and unlike each other. Aligning a run to the runs acquired nearest
